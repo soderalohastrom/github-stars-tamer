@@ -22,9 +22,7 @@ import { router } from 'expo-router';
 import RepositoryCard from '../../src/components/RepositoryCard';
 import LoadingSpinner from '../../src/components/LoadingSpinner';
 import ErrorMessage from '../../src/components/ErrorMessage';
-import AIOrganizeButton from '../../src/components/AIOrganizeButton';
-import AIUndoButton from '../../src/components/AIUndoButton';
-import AISuggestionsReview from '../../src/components/AISuggestionsReview';
+import StagingPanel from '../../src/components/StagingPanel';
 import AddToListModal from '../../src/components/AddToListModal';
 import CreateListModal from '../../src/components/CreateListModal';
 
@@ -36,10 +34,6 @@ const RepositoriesScreen = () => {
   const [sortBy, setSortBy] = useState<'starred_at' | 'name' | 'stars' | 'updated'>('starred_at');
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc');
   
-  // AI-related state
-  const [showAISuggestions, setShowAISuggestions] = useState(false);
-  const [aiProcessingJobId, setAiProcessingJobId] = useState<string | null>(null);
-
   // List-related state
   const [addToListModalVisible, setAddToListModalVisible] = useState(false);
   const [createListModalVisible, setCreateListModalVisible] = useState(false);
@@ -62,15 +56,10 @@ const RepositoriesScreen = () => {
     user?.id ? { clerkUserId: user.id } : 'skip'
   );
 
-  // AI-related queries
+  // AI settings
   const aiSettings = useQuery(
     api.ai.getAiSettings,
     user?.id ? { clerkUserId: user.id } : 'skip'
-  );
-
-  const pendingSuggestions = useQuery(
-    api.ai.getUserSuggestions,
-    user?.id ? { clerkUserId: user.id, status: 'pending' } : 'skip'
   );
 
   // Mutations
@@ -151,21 +140,6 @@ const RepositoriesScreen = () => {
         },
       ]
     );
-  };
-
-  // AI-related handlers
-  const handleAIProcessingStart = () => {
-    console.log('AI processing started');
-  };
-
-  const handleAIProcessingComplete = (result: any) => {
-    console.log('AI processing complete:', result);
-    setAiProcessingJobId(result.jobId);
-    setShowAISuggestions(true);
-  };
-
-  const handleAIUndo = () => {
-    console.log('AI undo completed');
   };
 
   const handleOpenAISettings = () => {
@@ -432,18 +406,13 @@ const RepositoriesScreen = () => {
       </View>
 
       <View style={styles.content}>
-        {/* AI Components */}
+        {/* AI Organize + Staging Panel */}
         {aiSettings?.enableAI && repositories && repositories.length > 0 && (
-          <>
-            <AIOrganizeButton
-              selectedRepositories={[]}
-              onStartProcessing={handleAIProcessingStart}
-              onComplete={handleAIProcessingComplete}
-            />
-            <AIUndoButton onUndoComplete={handleAIUndo} />
-          </>
+          <StagingPanel
+            onOpenAISettings={handleOpenAISettings}
+          />
         )}
-        
+
         <FlatList
           data={repositories}
           renderItem={renderRepository}
@@ -460,13 +429,6 @@ const RepositoriesScreen = () => {
           ListEmptyComponent={renderEmptyState}
         />
       </View>
-
-      {/* AI Suggestions Review Modal */}
-      <AISuggestionsReview
-        visible={showAISuggestions}
-        onClose={() => setShowAISuggestions(false)}
-        jobId={aiProcessingJobId as any}
-      />
 
       {/* Add to List Modal */}
       <AddToListModal

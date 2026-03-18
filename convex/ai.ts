@@ -1045,3 +1045,103 @@ export const getUsageStats = query({
     };
   },
 });
+
+// Save AI-generated taxonomy as categories
+export const saveTaxonomyAsCategories = mutation({
+  args: {
+    clerkUserId: v.string(),
+    categories: v.array(
+      v.object({
+        name: v.string(),
+        description: v.string(),
+        color: v.string(),
+        icon: v.optional(v.string()),
+      })
+    ),
+    clearExisting: v.optional(v.boolean()),
+  },
+  handler: async (ctx, args) => {
+    const user = await ctx.db
+      .query("users")
+      .withIndex("by_clerk_user_id", (q) => q.eq("clerkUserId", args.clerkUserId))
+      .first();
+
+    if (!user) throw new ConvexError("User not found");
+
+    // Optionally clear existing categories (only if no repos assigned)
+    if (args.clearExisting) {
+      const existing = await ctx.db
+        .query("categories")
+        .withIndex("by_user_id", (q) => q.eq("userId", user._id))
+        .collect();
+
+      for (const cat of existing) {
+        const assignments = await ctx.db
+          .query("repositoryCategories")
+          .withIndex("by_category_id", (q) => q.eq("categoryId", cat._id))
+          .first();
+
+        if (!assignments) {
+          await ctx.db.delete(cat._id);
+        }
+      }
+    }
+
+    const now = Date.now();
+    const created: string[] = [];
+    const skipped: string[] = [];
+
+    for (let i = 0; i < args.categories.length; i++) {
+      const cat = args.categories[i];
+
+      // Skip if category already exists
+      const existing = await ctx.db
+        .query("categories")
+        .withIndex("by_user_id", (q) => q.eq("userId", user._id))
+        .filter((q) => q.eq(q.field("name"), cat.name))
+        .first();
+
+      if (existing) {
+        skipped.push(cat.name);
+        continue;
+      }
+
+      await ctx.db.insert("categories", {
+        userId: user._id,
+        name: cat.name,
+        description: cat.description,
+        color: cat.color,
+        icon: cat.icon,
+        sortOrder: i,
+        metadata: { repositoryCount: 0 },
+        createdAt: now,
+        updatedAt: now,
+      });
+      created.push(cat.name);
+    }
+
+    return { created, skipped };
+  },
+});
+
+// Get all pending suggestions count (for staging banner)
+export const getPendingSuggestionsCount = query({
+  args: { clerkUserId: v.string() },
+  handler: async (ctx, { clerkUserId }) => {
+    const user = await ctx.db
+      .query("users")
+      .withIndex("by_clerk_user_id", (q) => q.eq("clerkUserId", clerkUserId))
+      .first();
+
+    if (!user) return 0;
+
+    const pending = await ctx.db
+      .query("aiCategorizationSuggestions")
+      .withIndex("by_user_and_status", (q) =>
+        q.eq("userId", user._id).eq("status", "pending")
+      )
+      .collect();
+
+    return pending.length;
+  },
+});

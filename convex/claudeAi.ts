@@ -516,6 +516,175 @@ export const getUsageStats = internalQuery({
   },
 });
 
+// Generate a category taxonomy by analyzing a sample of repos
+export const generateCategoryTaxonomy = action({
+  args: {
+    clerkUserId: v.string(),
+    categoryCount: v.optional(v.number()), // target 10-20
+    model: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const model = args.model || DEFAULT_MODEL;
+    const targetCount = args.categoryCount || 15;
+
+    const apiKey = process.env.ANTHROPIC_API_KEY;
+    if (!apiKey) {
+      throw new ConvexError("ANTHROPIC_API_KEY not configured");
+    }
+
+    const user = await ctx.runQuery(internal.users.getUserByClerkId, {
+      clerkUserId: args.clerkUserId,
+    });
+    if (!user) throw new ConvexError("User not found");
+
+    // Sample repos: take a diverse spread by language and stars
+    const allRepos = await ctx.runQuery(internal.claudeAi.sampleRepositories, {
+      userId: user._id,
+      limit: 60,
+    });
+
+    if (allRepos.length === 0) {
+      throw new ConvexError("No repositories to analyze");
+    }
+
+    // Get existing categories if any
+    const existingCategories = await ctx.runQuery(
+      internal.claudeAi.getUserCategoryNames,
+      { userId: user._id }
+    );
+
+    const repoSummaries = allRepos.map((r: any) => ({
+      name: r.name,
+      description: r.description || "No description",
+      language: r.language || "Unknown",
+      topics: r.topics?.slice(0, 5) || [],
+      stars: r.stargazersCount,
+    }));
+
+    const prompt = `You are an expert at organizing GitHub starred repositories. Analyze this sample of ${repoSummaries.length} starred repos and propose a taxonomy of ${targetCount} categories.
+
+## Requirements:
+1. Categories should be broad enough to cover most repos but specific enough to be useful
+2. Consider: domain (AI/ML, Web Dev, DevOps, Data), purpose (tool, library, framework, learning resource), and cross-cutting concerns
+3. Each category needs a name, short description, a hex color, and a Feather icon name
+4. Aim for ${targetCount} categories (minimum 8, maximum 25)
+5. Categories should be mutually exclusive where possible but a repo could fit multiple
+${existingCategories.length > 0 ? `6. Consider these existing categories: ${existingCategories.join(", ")}` : ""}
+
+## Sample Repositories:
+${JSON.stringify(repoSummaries, null, 2)}
+
+## Response Format:
+Respond ONLY with valid JSON, no markdown:
+{
+  "categories": [
+    {
+      "name": "Category Name",
+      "description": "What belongs here",
+      "color": "#hex",
+      "icon": "feather-icon-name",
+      "examples": ["repo-name-1", "repo-name-2"]
+    }
+  ],
+  "reasoning": "Brief explanation of the taxonomy approach"
+}`;
+
+    const response = await fetch(CLAUDE_API_BASE, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": apiKey,
+        "anthropic-version": CLAUDE_API_VERSION,
+      },
+      body: JSON.stringify({
+        model,
+        max_tokens: 4096,
+        messages: [{ role: "user", content: prompt }],
+      }),
+    });
+
+    if (!response.ok) {
+      const errorBody = await response.text();
+      throw new ConvexError(`Claude API error: ${response.status} - ${errorBody}`);
+    }
+
+    const responseData = await response.json();
+    const content = responseData.content?.[0]?.text || "";
+
+    // Parse response
+    let jsonStr = content.trim();
+    if (jsonStr.includes("```json")) {
+      const match = jsonStr.match(/```json\s*([\s\S]*?)\s*```/);
+      if (match) jsonStr = match[1];
+    } else if (jsonStr.includes("```")) {
+      const match = jsonStr.match(/```\s*([\s\S]*?)\s*```/);
+      if (match) jsonStr = match[1];
+    }
+
+    const objectMatch = jsonStr.match(/\{[\s\S]*\}/);
+    if (!objectMatch) {
+      throw new ConvexError("No JSON object found in response");
+    }
+
+    const parsed = JSON.parse(objectMatch[0]);
+
+    // Track usage
+    const inputTokens = responseData.usage?.input_tokens || 0;
+    const outputTokens = responseData.usage?.output_tokens || 0;
+    await ctx.runMutation(internal.claudeAi.recordAiUsage, {
+      userId: user._id,
+      provider: "claude",
+      model,
+      inputTokens,
+      outputTokens,
+      totalTokens: inputTokens + outputTokens,
+      estimatedCostUsd: calculateCost(model, inputTokens, outputTokens),
+      requestType: "categorization",
+    });
+
+    return {
+      categories: parsed.categories || [],
+      reasoning: parsed.reasoning || "",
+      usage: { inputTokens, outputTokens },
+    };
+  },
+});
+
+// Internal query to sample diverse repos for taxonomy generation
+export const sampleRepositories = internalQuery({
+  args: {
+    userId: v.id("users"),
+    limit: v.number(),
+  },
+  handler: async (ctx, { userId, limit }) => {
+    // Get all repos sorted by stars descending (most notable first)
+    const repos = await ctx.db
+      .query("repositories")
+      .withIndex("by_user_id", (q) => q.eq("userId", userId))
+      .collect();
+
+    if (repos.length <= limit) return repos;
+
+    // Sample strategy: take top-starred, recent, and random mix
+    const sorted = [...repos].sort((a, b) => b.stargazersCount - a.stargazersCount);
+    const topStarred = sorted.slice(0, Math.floor(limit / 3));
+
+    const byDate = [...repos].sort((a, b) => b.starredAt.localeCompare(a.starredAt));
+    const recent = byDate.slice(0, Math.floor(limit / 3));
+
+    // Fill rest with random picks
+    const picked = new Set([...topStarred, ...recent].map((r) => r._id));
+    const remaining = repos.filter((r) => !picked.has(r._id));
+    const randomPicks: typeof repos = [];
+    for (let i = 0; i < limit - picked.size && remaining.length > 0; i++) {
+      const idx = Math.floor(Math.random() * remaining.length);
+      randomPicks.push(remaining.splice(idx, 1)[0]);
+    }
+
+    return [...topStarred, ...recent, ...randomPicks].slice(0, limit);
+  },
+});
+
 // Action to test Claude API connection
 export const testClaudeConnection = action({
   args: {
