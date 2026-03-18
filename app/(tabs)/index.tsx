@@ -25,7 +25,6 @@ import ErrorMessage from '../../src/components/ErrorMessage';
 import AIOrganizeButton from '../../src/components/AIOrganizeButton';
 import AIUndoButton from '../../src/components/AIUndoButton';
 import AISuggestionsReview from '../../src/components/AISuggestionsReview';
-import AuthDebugger from '../../src/components/AuthDebugger';
 import AddToListModal from '../../src/components/AddToListModal';
 import CreateListModal from '../../src/components/CreateListModal';
 
@@ -433,9 +432,6 @@ const RepositoriesScreen = () => {
       </View>
 
       <View style={styles.content}>
-        {/* Debug Component */}
-        <AuthDebugger />
-        
         {/* AI Components */}
         {aiSettings?.enableAI && repositories && repositories.length > 0 && (
           <>
