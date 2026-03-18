@@ -41,11 +41,20 @@ export const MODEL_OPTIONS = {
   ],
   openai: [
     {
+      id: "gpt-5.4-nano",
+      name: "GPT-5.4 Nano",
+      description: "Fastest, cheapest (~$0.10/1M tokens)",
+    },
+    {
+      id: "gpt-5.4-mini",
+      name: "GPT-5.4 Mini",
+      description: "Fast, great quality (~$0.40/1M tokens)",
+    },
+    {
       id: "gpt-4o-mini",
       name: "GPT-4o Mini",
-      description: "Fast and affordable",
+      description: "Previous gen, reliable",
     },
-    { id: "gpt-4o", name: "GPT-4o", description: "Best quality" },
   ],
   ollama: [
     { id: "gemma:2b", name: "Gemma 2B", description: "Small, fast" },
@@ -594,6 +603,15 @@ export const processNextBatch = action({
           clerkUserId: args.clerkUserId,
           repositoryIds: batchRepoIds,
           model: settings?.aiModel || "claude-haiku-4-5",
+          includeReadme: settings?.includeReadme ?? true,
+          batchId: job.batchId,
+        });
+      } else if (provider === "openai") {
+        // Use OpenAI
+        result = await ctx.runAction(api.openaiAi.categorizeRepositories, {
+          clerkUserId: args.clerkUserId,
+          repositoryIds: batchRepoIds,
+          model: settings?.aiModel || "gpt-5.4-nano",
           includeReadme: settings?.includeReadme ?? true,
           batchId: job.batchId,
         });

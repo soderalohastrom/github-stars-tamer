@@ -47,8 +47,9 @@ const MODEL_OPTIONS: Record<string, Array<{ id: string; name: string; descriptio
     { id: 'claude-sonnet-4-6', name: 'Claude 4.6 Sonnet', description: 'Best quality (~$3/1M tokens)' },
   ],
   openai: [
-    { id: 'gpt-4o-mini', name: 'GPT-4o Mini', description: 'Fast and affordable' },
-    { id: 'gpt-4o', name: 'GPT-4o', description: 'Best quality' },
+    { id: 'gpt-5.4-nano', name: 'GPT-5.4 Nano', description: 'Fastest, cheapest (~$0.10/1M tokens)' },
+    { id: 'gpt-5.4-mini', name: 'GPT-5.4 Mini', description: 'Fast, great quality (~$0.40/1M tokens)' },
+    { id: 'gpt-4o-mini', name: 'GPT-4o Mini', description: 'Previous gen, reliable' },
   ],
   ollama: [
     { id: 'gemma:2b', name: 'Gemma 2B', description: 'Small, fast, good for testing' },
@@ -95,6 +96,7 @@ const AISettingsScreen = () => {
   // Mutations and actions
   const updateAiSettings = useMutation(api.ai.updateAiSettings);
   const testClaudeConnection = useAction(api.claudeAi.testClaudeConnection);
+  const testOpenAIConnection = useAction(api.openaiAi.testOpenAIConnection);
   const testOllamaConnection = useAction(api.ai.testOllamaConnectionAction);
 
   // Load settings when available
@@ -174,6 +176,10 @@ const AISettingsScreen = () => {
         result = await testClaudeConnection({
           model: localSettings.aiModel,
         });
+      } else if (localSettings.aiProvider === 'openai') {
+        result = await testOpenAIConnection({
+          model: localSettings.aiModel,
+        });
       } else if (localSettings.aiProvider === 'ollama') {
         result = await testOllamaConnection({
           endpoint: localSettings.ollamaEndpoint,
@@ -181,7 +187,7 @@ const AISettingsScreen = () => {
           timeoutMs: 10000,
         });
       } else {
-        Alert.alert('Info', 'OpenAI connection testing not yet implemented');
+        Alert.alert('Info', 'Provider not supported');
         setIsTesting(false);
         return;
       }

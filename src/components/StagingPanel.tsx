@@ -51,8 +51,15 @@ const StagingPanel: React.FC<StagingPanelProps> = ({ onOpenAISettings }) => {
   const processNextBatch = useAction(api.ai.processNextBatch);
   const applySuggestion = useMutation(api.ai.applySuggestion);
   const rejectSuggestion = useMutation(api.ai.rejectSuggestion);
-  const generateTaxonomy = useAction(api.claudeAi.generateCategoryTaxonomy);
+  const generateTaxonomyClaude = useAction(api.claudeAi.generateCategoryTaxonomy);
+  const generateTaxonomyOpenAI = useAction(api.openaiAi.generateCategoryTaxonomy);
   const saveTaxonomy = useMutation(api.ai.saveTaxonomyAsCategories);
+
+  // AI settings to determine provider
+  const aiSettings = useQuery(
+    api.ai.getAiSettings,
+    user?.id ? { clerkUserId: user.id } : 'skip'
+  );
 
   const hasPending = (pendingCount || 0) > 0;
   const hasCategories = categories && categories.length > 0;
@@ -62,6 +69,8 @@ const StagingPanel: React.FC<StagingPanelProps> = ({ onOpenAISettings }) => {
     if (!user?.id) return;
     setIsGeneratingTaxonomy(true);
     try {
+      const provider = aiSettings?.aiProvider || 'openai';
+      const generateTaxonomy = provider === 'claude' ? generateTaxonomyClaude : generateTaxonomyOpenAI;
       const result = await generateTaxonomy({ clerkUserId: user.id });
 
       if (result.categories.length > 0) {
