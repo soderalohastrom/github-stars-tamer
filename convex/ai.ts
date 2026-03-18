@@ -12,7 +12,7 @@ import { Id } from "./_generated/dataModel";
 // Default AI settings
 const DEFAULT_AI_SETTINGS = {
   aiProvider: "claude" as const,
-  aiModel: "claude-3-haiku-20240307",
+  aiModel: "claude-haiku-4-5",
   enableAI: false,
   includeReadme: true,
   batchSize: 10,
@@ -29,19 +29,14 @@ const DEFAULT_AI_SETTINGS = {
 export const MODEL_OPTIONS = {
   claude: [
     {
-      id: "claude-3-haiku-20240307",
-      name: "Claude 3 Haiku",
-      description: "Fastest, most cost-effective",
+      id: "claude-haiku-4-5",
+      name: "Claude 4.5 Haiku",
+      description: "Fast, cost-effective (~$1/1M tokens)",
     },
     {
-      id: "claude-3-5-haiku-20241022",
-      name: "Claude 3.5 Haiku",
-      description: "Fast with improved quality",
-    },
-    {
-      id: "claude-3-5-sonnet-20241022",
-      name: "Claude 3.5 Sonnet",
-      description: "Best quality, higher cost",
+      id: "claude-sonnet-4-6",
+      name: "Claude 4.6 Sonnet",
+      description: "Best quality (~$3/1M tokens)",
     },
   ],
   openai: [
@@ -598,7 +593,7 @@ export const processNextBatch = action({
         result = await ctx.runAction(api.claudeAi.categorizeRepositories, {
           clerkUserId: args.clerkUserId,
           repositoryIds: batchRepoIds,
-          model: settings?.aiModel || "claude-3-haiku-20240307",
+          model: settings?.aiModel || "claude-haiku-4-5",
           includeReadme: settings?.includeReadme ?? true,
           batchId: job.batchId,
         });

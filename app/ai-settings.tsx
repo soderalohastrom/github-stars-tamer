@@ -43,9 +43,8 @@ const PROVIDERS = [
 
 const MODEL_OPTIONS: Record<string, Array<{ id: string; name: string; description: string }>> = {
   claude: [
-    { id: 'claude-3-haiku-20240307', name: 'Claude 3 Haiku', description: 'Fastest, most cost-effective (~$0.25/1M tokens)' },
-    { id: 'claude-3-5-haiku-20241022', name: 'Claude 3.5 Haiku', description: 'Fast with improved quality (~$1/1M tokens)' },
-    { id: 'claude-3-5-sonnet-20241022', name: 'Claude 3.5 Sonnet', description: 'Best quality, higher cost (~$3/1M tokens)' },
+    { id: 'claude-haiku-4-5', name: 'Claude 4.5 Haiku', description: 'Fast, cost-effective (~$1/1M tokens)' },
+    { id: 'claude-sonnet-4-6', name: 'Claude 4.6 Sonnet', description: 'Best quality (~$3/1M tokens)' },
   ],
   openai: [
     { id: 'gpt-4o-mini', name: 'GPT-4o Mini', description: 'Fast and affordable' },
@@ -72,7 +71,7 @@ const AISettingsScreen = () => {
   const [localSettings, setLocalSettings] = useState({
     enableAI: false,
     aiProvider: 'claude' as Provider,
-    aiModel: 'claude-3-haiku-20240307',
+    aiModel: 'claude-haiku-4-5',
     ollamaEndpoint: 'http://localhost:11434',
     includeReadme: true,
     timeoutMs: 30000,
@@ -220,7 +219,7 @@ const AISettingsScreen = () => {
             setLocalSettings({
               enableAI: false,
               aiProvider: 'claude',
-              aiModel: 'claude-3-haiku-20240307',
+              aiModel: 'claude-haiku-4-5',
               ollamaEndpoint: 'http://localhost:11434',
               includeReadme: true,
               timeoutMs: 30000,

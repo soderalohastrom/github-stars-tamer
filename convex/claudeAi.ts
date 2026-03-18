@@ -9,14 +9,13 @@ const CLAUDE_API_VERSION = "2023-06-01";
 
 // Model pricing (per million tokens)
 const MODEL_PRICING: Record<string, { input: number; output: number }> = {
-  "claude-3-haiku-20240307": { input: 0.25, output: 1.25 },
-  "claude-3-5-haiku-20241022": { input: 1.0, output: 5.0 },
-  "claude-3-5-sonnet-20241022": { input: 3.0, output: 15.0 },
-  "claude-3-opus-20240229": { input: 15.0, output: 75.0 },
+  "claude-haiku-4-5": { input: 1.0, output: 5.0 },
+  "claude-sonnet-4-6": { input: 3.0, output: 15.0 },
+  "claude-opus-4-6": { input: 15.0, output: 75.0 },
 };
 
 // Default model for categorization (fast and cost-effective)
-const DEFAULT_MODEL = "claude-3-haiku-20240307";
+const DEFAULT_MODEL = "claude-haiku-4-5";
 
 // Types for categorization
 interface RepositoryForCategorization {
