@@ -16,3 +16,7 @@ web-build/
 .osgrep/
 .claude/
 .collaborator
+
+# Auto Claude data directory
+.auto-claude/
+.omx/
