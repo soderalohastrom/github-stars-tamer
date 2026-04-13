@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   View,
   Text,
@@ -25,6 +25,7 @@ import ErrorMessage from '../../src/components/ErrorMessage';
 import StagingPanel from '../../src/components/StagingPanel';
 import AddToListModal from '../../src/components/AddToListModal';
 import CreateListModal from '../../src/components/CreateListModal';
+import FilterChips from '../../src/components/FilterChips';
 
 const RepositoriesScreen = () => {
   const { user } = useUser();
@@ -34,6 +35,11 @@ const RepositoriesScreen = () => {
   const [sortBy, setSortBy] = useState<'starred_at' | 'name' | 'stars' | 'updated'>('starred_at');
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc');
   
+  // Filter state
+  const [filters, setFilters] = useState<{language?: string; topics?: string[]; minStars?: number}>({});
+  const [uncategorizedOnly, setUncategorizedOnly] = useState(false);
+  const [displayCount, setDisplayCount] = useState(50);
+
   // List-related state
   const [addToListModalVisible, setAddToListModalVisible] = useState(false);
   const [createListModalVisible, setCreateListModalVisible] = useState(false);
@@ -47,8 +53,19 @@ const RepositoriesScreen = () => {
           clerkUserId: user.id,
           sort: sortBy,
           direction: sortDirection,
+          filters: Object.keys(filters).length > 0 ? filters : undefined,
         }
       : 'skip'
+  );
+
+  const languages = useQuery(
+    api.repositories.getLanguages,
+    user?.id ? { clerkUserId: user.id } : 'skip'
+  );
+
+  const topics = useQuery(
+    api.repositories.getTopics,
+    user?.id ? { clerkUserId: user.id } : 'skip'
   );
 
   const repositoryStats = useQuery(
@@ -82,6 +99,22 @@ const RepositoriesScreen = () => {
   const addToList = useMutation(api.lists.addRepository);
   const removeFromList = useMutation(api.lists.removeRepository);
   const createList = useMutation(api.lists.create);
+
+  // Filtered + paginated repository list
+  const displayedRepositories = useMemo(() => {
+    if (!repositories) return [];
+    if (!uncategorizedOnly) return repositories;
+    return repositories.filter((repo: any) => !repo.categories || repo.categories.length === 0);
+  }, [repositories, uncategorizedOnly]);
+
+  const paginatedRepositories = useMemo(() => {
+    return displayedRepositories.slice(0, displayCount);
+  }, [displayedRepositories, displayCount]);
+
+  // Reset pagination when filters/sort change
+  useEffect(() => {
+    setDisplayCount(50);
+  }, [sortBy, sortDirection, filters, uncategorizedOnly]);
 
   const onRefresh = async () => {
     setRefreshing(true);
@@ -281,6 +314,26 @@ const RepositoriesScreen = () => {
       fontSize: 14,
       color: isDark ? '#9ca3af' : '#6b7280',
     },
+    toolbarButtonActive: {
+      backgroundColor: '#3b82f6',
+    },
+    toolbarButtonTextActive: {
+      color: '#ffffff',
+    },
+    filterChipsContainer: {
+      paddingHorizontal: 20,
+      backgroundColor: isDark ? '#1a1a2e' : '#ffffff',
+      borderBottomWidth: 1,
+      borderBottomColor: isDark ? '#374151' : '#e5e7eb',
+    },
+    loadMoreContainer: {
+      paddingVertical: 16,
+      alignItems: 'center',
+    },
+    loadMoreText: {
+      fontSize: 13,
+      color: isDark ? '#9ca3af' : '#6b7280',
+    },
     content: {
       flex: 1,
     },
@@ -398,11 +451,28 @@ const RepositoriesScreen = () => {
             <Feather name="settings" size={16} color={isDark ? '#ffffff' : '#374151'} />
             <Text style={styles.toolbarButtonText}>AI</Text>
           </Pressable>
+
+          <Pressable
+            style={[styles.toolbarButton, uncategorizedOnly && styles.toolbarButtonActive]}
+            onPress={() => setUncategorizedOnly(!uncategorizedOnly)}
+          >
+            <Feather name="inbox" size={16} color={uncategorizedOnly ? '#ffffff' : isDark ? '#ffffff' : '#374151'} />
+            <Text style={[styles.toolbarButtonText, uncategorizedOnly && styles.toolbarButtonTextActive]}>Unsorted</Text>
+          </Pressable>
         </View>
-        
+
         <Text style={styles.resultCount}>
-          {repositories.length} repositories
+          {displayedRepositories.length} repositories
         </Text>
+      </View>
+
+      {/* Quick Filter Chips */}
+      <View style={styles.filterChipsContainer}>
+        <FilterChips
+          availableLanguages={(languages || []).map((l: any) => l.language)}
+          availableTopics={(topics || []).map((t: any) => t.topic)}
+          onFilterChange={setFilters}
+        />
       </View>
 
       <View style={styles.content}>
@@ -414,7 +484,7 @@ const RepositoriesScreen = () => {
         )}
 
         <FlatList
-          data={repositories}
+          data={paginatedRepositories}
           renderItem={renderRepository}
           keyExtractor={(item) => item._id}
           contentContainerStyle={styles.repositoryList}
@@ -427,6 +497,21 @@ const RepositoriesScreen = () => {
             />
           }
           ListEmptyComponent={renderEmptyState}
+          onEndReached={() => {
+            if (displayCount < displayedRepositories.length) {
+              setDisplayCount(prev => prev + 50);
+            }
+          }}
+          onEndReachedThreshold={0.5}
+          ListFooterComponent={
+            displayCount < displayedRepositories.length ? (
+              <View style={styles.loadMoreContainer}>
+                <Text style={styles.loadMoreText}>
+                  Showing {paginatedRepositories.length} of {displayedRepositories.length}
+                </Text>
+              </View>
+            ) : null
+          }
         />
       </View>
 

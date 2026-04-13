@@ -489,40 +489,6 @@ export const getRepositoryStats = query({
   },
 });
 
-// Search repositories
-export const searchRepositories = mutation({
-  args: {
-    clerkUserId: v.string(),
-    query: v.string(),
-    filters: v.optional(v.object({
-      language: v.optional(v.string()),
-      category: v.optional(v.string()),
-      minStars: v.optional(v.number()),
-      maxStars: v.optional(v.number()),
-      topics: v.optional(v.array(v.string())),
-    })),
-  },
-  handler: async (ctx, args) => {
-    const user = await getUserByClerkId(ctx, args.clerkUserId);
-    if (!user) {
-      throw new ConvexError("User not found");
-    }
-
-    // Store search history
-    await ctx.db.insert("searchHistory", {
-      userId: user._id,
-      query: args.query,
-      filters: args.filters,
-      resultCount: 0, // Will be updated after search
-      searchedAt: Date.now(),
-    });
-
-    // This would typically call the getUserRepositories query
-    // with the search parameters to get actual results
-    return { success: true };
-  },
-});
-
 // Remove a repository by its GitHub ID (internal)
 export const removeRepositoryByGitHubId = internalMutation({
   args: {
