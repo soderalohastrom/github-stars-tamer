@@ -13,6 +13,7 @@ import type * as categories from "../categories.js";
 import type * as claudeAi from "../claudeAi.js";
 import type * as export_ from "../export.js";
 import type * as github from "../github.js";
+import type * as knowledge from "../knowledge.js";
 import type * as lists from "../lists.js";
 import type * as openaiAi from "../openaiAi.js";
 import type * as readme from "../readme.js";
@@ -35,6 +36,7 @@ declare const fullApi: ApiFromModules<{
   claudeAi: typeof claudeAi;
   export: typeof export_;
   github: typeof github;
+  knowledge: typeof knowledge;
   lists: typeof lists;
   openaiAi: typeof openaiAi;
   readme: typeof readme;

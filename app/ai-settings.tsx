@@ -34,6 +34,12 @@ const PROVIDERS = [
     icon: 'zap',
   },
   {
+    id: 'cerebras',
+    name: 'Cerebras',
+    description: 'Ultra-fast inference (~2000 tok/s)',
+    icon: 'activity',
+  },
+  {
     id: 'ollama',
     name: 'Ollama',
     description: 'Local AI - Free but requires setup',
@@ -51,6 +57,11 @@ const MODEL_OPTIONS: Record<string, Array<{ id: string; name: string; descriptio
     { id: 'gpt-5.4-mini', name: 'GPT-5.4 Mini', description: 'Fast, great quality (~$0.40/1M tokens)' },
     { id: 'gpt-4o-mini', name: 'GPT-4o Mini', description: 'Previous gen, reliable' },
   ],
+  cerebras: [
+    { id: 'llama-3.3-70b', name: 'Llama 3.3 70B', description: 'Best quality on Cerebras (~$0.85/1M tokens)' },
+    { id: 'llama-4-scout-17b-16e-instruct', name: 'Llama 4 Scout', description: 'Newest, ultra-fast (~$0.65/1M tokens)' },
+    { id: 'qwen-3-32b', name: 'Qwen 3 32B', description: 'Cheapest (~$0.40/1M tokens)' },
+  ],
   ollama: [
     { id: 'gemma:2b', name: 'Gemma 2B', description: 'Small, fast, good for testing' },
     { id: 'llama2:7b', name: 'Llama 2 7B', description: 'Balanced performance' },
@@ -58,7 +69,7 @@ const MODEL_OPTIONS: Record<string, Array<{ id: string; name: string; descriptio
   ],
 };
 
-type Provider = 'claude' | 'openai' | 'ollama';
+type Provider = 'claude' | 'openai' | 'ollama' | 'cerebras';
 
 const AISettingsScreen = () => {
   const { user } = useUser();

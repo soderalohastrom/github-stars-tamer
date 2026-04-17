@@ -1,6 +1,6 @@
 import { expect, test, describe } from "vitest";
 import { api } from "../_generated/api";
-import { createTestConvex } from "./setup";
+import { createTestConvex } from "./setup.test-helper";
 
 // Helper to create a user and return the clerkUserId
 async function setupUser(t: any, clerkUserId = "clerk_123") {

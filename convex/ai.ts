@@ -61,6 +61,23 @@ export const MODEL_OPTIONS = {
     { id: "llama2:7b", name: "Llama 2 7B", description: "Balanced" },
     { id: "mistral:7b", name: "Mistral 7B", description: "Good quality" },
   ],
+  cerebras: [
+    {
+      id: "llama-3.3-70b",
+      name: "Llama 3.3 70B",
+      description: "Best quality on Cerebras (~$0.85/1M tokens)",
+    },
+    {
+      id: "llama-4-scout-17b-16e-instruct",
+      name: "Llama 4 Scout",
+      description: "Newest, ultra-fast (~$0.65/1M tokens)",
+    },
+    {
+      id: "qwen-3-32b",
+      name: "Qwen 3 32B",
+      description: "Cheapest (~$0.40/1M tokens)",
+    },
+  ],
 };
 
 // Get AI settings for a user
@@ -105,7 +122,7 @@ export const updateAiSettings = mutation({
     clerkUserId: v.optional(v.string()),
     userId: v.optional(v.string()),
     aiProvider: v.optional(
-      v.union(v.literal("claude"), v.literal("openai"), v.literal("ollama"))
+      v.union(v.literal("claude"), v.literal("openai"), v.literal("ollama"), v.literal("cerebras"))
     ),
     aiModel: v.optional(v.string()),
     enableAI: v.optional(v.boolean()),

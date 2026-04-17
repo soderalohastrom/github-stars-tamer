@@ -26,6 +26,7 @@ import StagingPanel from '../../src/components/StagingPanel';
 import AddToListModal from '../../src/components/AddToListModal';
 import CreateListModal from '../../src/components/CreateListModal';
 import FilterChips from '../../src/components/FilterChips';
+import ListsManagementModal from '../../src/components/ListsManagementModal';
 
 const RepositoriesScreen = () => {
   const { user } = useUser();
@@ -43,6 +44,7 @@ const RepositoriesScreen = () => {
   // List-related state
   const [addToListModalVisible, setAddToListModalVisible] = useState(false);
   const [createListModalVisible, setCreateListModalVisible] = useState(false);
+  const [listsModalVisible, setListsModalVisible] = useState(false);
   const [selectedRepoForList, setSelectedRepoForList] = useState<any>(null);
 
   // Queries
@@ -452,6 +454,11 @@ const RepositoriesScreen = () => {
             <Text style={styles.toolbarButtonText}>AI</Text>
           </Pressable>
 
+          <Pressable style={styles.toolbarButton} onPress={() => setListsModalVisible(true)}>
+            <Feather name="layers" size={16} color={isDark ? '#ffffff' : '#374151'} />
+            <Text style={styles.toolbarButtonText}>Lists</Text>
+          </Pressable>
+
           <Pressable
             style={[styles.toolbarButton, uncategorizedOnly && styles.toolbarButtonActive]}
             onPress={() => setUncategorizedOnly(!uncategorizedOnly)}
@@ -535,6 +542,13 @@ const RepositoriesScreen = () => {
         visible={createListModalVisible}
         onClose={() => setCreateListModalVisible(false)}
         onSubmit={handleCreateList}
+      />
+
+      {/* Lists Management Modal */}
+      <ListsManagementModal
+        visible={listsModalVisible}
+        onClose={() => setListsModalVisible(false)}
+        onNavigateToList={(listId) => router.push(`/list/${listId}`)}
       />
     </SafeAreaView>
   );
