@@ -161,8 +161,10 @@ export const fetchReadmeExcerpt = action({
         };
       }
 
-      // Decode content (base64)
-      const content = Buffer.from(data.content, "base64").toString("utf-8");
+      // Decode content (base64, line-wrapped by GitHub). V8 runtime has no Buffer.
+      const base64 = (data.content ?? "").replace(/\s/g, "");
+      const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
+      const content = new TextDecoder("utf-8").decode(bytes);
 
       // Clean and truncate
       const cleaned = cleanMarkdown(content);
@@ -341,8 +343,10 @@ export const fetchReadmeExcerptInternal = internalAction({
         };
       }
 
-      // Decode and process
-      const content = Buffer.from(data.content, "base64").toString("utf-8");
+      // Decode and process (base64 line-wrapped by GitHub; V8 has no Buffer)
+      const base64 = (data.content ?? "").replace(/\s/g, "");
+      const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
+      const content = new TextDecoder("utf-8").decode(bytes);
       const cleaned = cleanMarkdown(content);
       const excerpt = truncateReadme(cleaned);
 

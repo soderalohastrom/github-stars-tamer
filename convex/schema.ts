@@ -258,6 +258,65 @@ export default defineSchema({
     .index("by_list_and_repository", ["listId", "repositoryId"])
     .index("by_list_and_sort", ["listId", "sortOrder"]),
 
+  // Knowledge graph — distilled wiki pages for starred repos
+  repoKnowledge: defineTable({
+    userId: v.id("users"),
+    repositoryId: v.id("repositories"),
+
+    // The distilled wiki page (markdown string)
+    markdownContent: v.string(),
+
+    // Structured fields (extracted from LLM response for querying/display)
+    summary: v.string(),
+    keyFeatures: v.array(v.string()),
+    stack: v.object({
+      languages: v.array(v.string()),
+      keyDeps: v.array(v.string()),
+      runtime: v.optional(v.string()),
+    }),
+    whyNotable: v.array(v.string()),
+
+    // Cross-references (structured for graph edges)
+    crossReferences: v.array(v.object({
+      targetRepositoryId: v.id("repositories"),
+      reason: v.string(),
+      edgeType: v.union(
+        v.literal("llm_discovered"),
+        v.literal("shared_topic"),
+        v.literal("shared_language"),
+        v.literal("same_owner"),
+      ),
+    })),
+
+    // Processing metadata
+    processedAt: v.number(),
+    readmeSha: v.optional(v.string()),
+    readmeLength: v.optional(v.number()),
+    processingModel: v.string(),
+    processingTokens: v.optional(v.object({
+      input: v.number(),
+      output: v.number(),
+    })),
+    processingTimeMs: v.optional(v.number()),
+
+    // Status
+    status: v.union(
+      v.literal("processed"),
+      v.literal("failed"),
+      v.literal("no_readme"),
+    ),
+    errorMessage: v.optional(v.string()),
+  })
+    .index("by_user_id", ["userId"])
+    .index("by_repository_id", ["repositoryId"])
+    .index("by_user_and_repository", ["userId", "repositoryId"])
+    .index("by_user_and_status", ["userId", "status"])
+    .index("by_user_and_processed_at", ["userId", "processedAt"])
+    .searchIndex("search_knowledge", {
+      searchField: "markdownContent",
+      filterFields: ["userId", "status"],
+    }),
+
   // AI Categorization Tables
   aiCategorizationSuggestions: defineTable({
     userId: v.id("users"),
@@ -334,7 +393,7 @@ export default defineSchema({
   aiSettings: defineTable({
     userId: v.id("users"),
     // Provider settings
-    aiProvider: v.union(v.literal("claude"), v.literal("openai"), v.literal("ollama")),
+    aiProvider: v.union(v.literal("claude"), v.literal("openai"), v.literal("ollama"), v.literal("cerebras")),
     aiModel: v.string(), // e.g., "claude-3-haiku-20240307", "gpt-4o-mini"
     enableAI: v.boolean(),
     // Ollama-specific (legacy, optional)
@@ -372,7 +431,10 @@ export default defineSchema({
       v.literal("single_categorize"),
       v.literal("batch_categorize"),
       v.literal("update_primer"),
-      v.literal("fetch_readmes")
+      v.literal("fetch_readmes"),
+      v.literal("knowledge_build"),
+      v.literal("knowledge_update"),
+      v.literal("knowledge_crossref"),
     ),
     status: v.union(
       v.literal("pending"),
@@ -408,7 +470,7 @@ export default defineSchema({
   aiUsage: defineTable({
     userId: v.id("users"),
     jobId: v.optional(v.id("aiProcessingJobs")),
-    provider: v.union(v.literal("claude"), v.literal("openai")),
+    provider: v.union(v.literal("claude"), v.literal("openai"), v.literal("cerebras")),
     model: v.string(),
     inputTokens: v.number(),
     outputTokens: v.number(),
@@ -417,7 +479,9 @@ export default defineSchema({
     requestType: v.union(
       v.literal("categorization"),
       v.literal("primer_update"),
-      v.literal("readme_summary")
+      v.literal("readme_summary"),
+      v.literal("knowledge_distillation"),
+      v.literal("knowledge_crossref"),
     ),
     providerRequestId: v.optional(v.string()),
     createdAt: v.number(),

@@ -2,6 +2,40 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Agent Workflow
+
+This project uses specialized AI agents in `.claude/agents/`. For any feature, bug fix, or significant change, **delegate to `@orchestrator`** — it manages the full workflow and returns a concise summary.
+
+### How it works
+
+`@orchestrator` runs the pipeline internally:
+1. `@architect` — plans the implementation
+2. `@coder` — writes code (no tests, no screenshots)
+3. `@tester` — writes/runs tests (loops with coder if failures)
+4. `@reviewer` — reviews the final diff for consistency
+5. `@design-qa` — screenshots affected pages (UI changes only)
+
+All verbose agent output stays inside the orchestrator's context. You get back a structured summary with: changes made, test results, review findings, and any issues.
+
+### Direct agent access
+
+| Agent | Purpose | Invoke |
+|-------|---------|--------|
+| **orchestrator** | Full workflow — plan, code, test, review, QA | `@orchestrator` |
+| **architect** | Plan only — scope, trade-offs, risks | `@architect` |
+| **coder** | Implement only — code + self-review | `@coder` |
+| **tester** | Test only — write/run affected tests | `@tester` |
+| **reviewer** | Review only — check diff for consistency | `@reviewer` |
+| **design-qa** | Visual QA — Playwright screenshots at 375x812 + 1440x900 | `@design-qa` |
+| **graph-viz** | Graph visualization — force-directed graph rendering | `@graph-viz` |
+| **prompt-engineer** | LLM prompt optimization for distillation pipeline | `@prompt-engineer` |
+
+### When NOT to delegate
+
+- Quick questions about the codebase (just answer directly)
+- Reading/explaining code (just read and explain)
+- Git operations, deployments, or config changes (handle directly)
+
 ## Development Commands
 
 ```bash
@@ -98,6 +132,9 @@ Clerk requires:
 - AI processing jobs track progress for batch operations
 - Undo/redo state stored in `categorizationHistory`
 
-## No Tests
+## Tests
 
-This project currently has no test files. Consider adding tests if modifying critical functionality.
+- **Framework:** Vitest + convex-test
+- **Location:** `convex/__tests__/*.test.ts`
+- **Run:** `npm run test` (all) or `npx vitest run convex/__tests__/<file>.test.ts` (specific)
+- **Verify script:** `scripts/verify.sh` — finds affected tests via codegraph, runs only those

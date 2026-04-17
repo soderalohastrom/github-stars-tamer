@@ -48,6 +48,7 @@ export default function RootLayout() {
               <Stack.Screen name="list/[id]" />
               <Stack.Screen name="shared/[shareId]" />
               <Stack.Screen name="repository/[id]" />
+              <Stack.Screen name="graph/[repoId]" />
               <Stack.Screen name="ai-settings" />
             </Stack>
             <StatusBar style="auto" />

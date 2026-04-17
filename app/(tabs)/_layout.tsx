@@ -44,11 +44,11 @@ export default function TabsLayout() {
         }}
       />
       <Tabs.Screen
-        name="lists"
+        name="graph"
         options={{
-          title: 'Lists',
+          title: 'AI Graph',
           tabBarIcon: ({ color, size }) => (
-            <Feather name="layers" size={size} color={color} />
+            <Feather name="share-2" size={size} color={color} />
           ),
         }}
       />

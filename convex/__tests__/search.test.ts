@@ -1,6 +1,6 @@
 import { expect, test, describe } from "vitest";
 import { api, internal } from "../_generated/api";
-import { createTestConvex } from "./setup";
+import { createTestConvex } from "./setup.test-helper";
 import { buildSearchText } from "../search";
 
 // Helper to set up a user
