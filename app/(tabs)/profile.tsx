@@ -68,13 +68,16 @@ const ProfileScreen = () => {
           onPress: async () => {
             setIsSigningOut(true);
             try {
-              await signOut();
-              router.replace('/(auth)/welcome');
+              // Clerk web needs redirectUrl
+              await signOut({ redirectUrl: window.location.origin + '/' });
             } catch (error) {
-              Alert.alert('Error', 'Failed to sign out');
-            } finally {
-              setIsSigningOut(false);
+              // Fallback: hard redirect on web
+              if (typeof window !== 'undefined') {
+                window.location.href = window.location.origin + '/';
+              }
             }
+            // Always reset — if signOut didn't throw, Clerk may have already redirected
+            setIsSigningOut(false);
           },
         },
       ]

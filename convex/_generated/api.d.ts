@@ -19,6 +19,7 @@ import type * as readme from "../readme.js";
 import type * as repositories from "../repositories.js";
 import type * as savedFilters from "../savedFilters.js";
 import type * as search from "../search.js";
+import type * as staticHosting from "../staticHosting.js";
 import type * as sync from "../sync.js";
 import type * as syncHistory from "../syncHistory.js";
 import type * as users from "../users.js";
@@ -41,6 +42,7 @@ declare const fullApi: ApiFromModules<{
   repositories: typeof repositories;
   savedFilters: typeof savedFilters;
   search: typeof search;
+  staticHosting: typeof staticHosting;
   sync: typeof sync;
   syncHistory: typeof syncHistory;
   users: typeof users;
@@ -72,4 +74,6 @@ export declare const internal: FilterApi<
   FunctionReference<any, "internal">
 >;
 
-export declare const components: {};
+export declare const components: {
+  staticHosting: import("@convex-dev/static-hosting/_generated/component.js").ComponentApi<"staticHosting">;
+};
