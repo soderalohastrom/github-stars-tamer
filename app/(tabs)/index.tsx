@@ -7,7 +7,9 @@ import {
   Pressable,
   RefreshControl,
   useColorScheme,
+  useWindowDimensions,
   Alert,
+  ScrollView,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
@@ -32,6 +34,8 @@ const RepositoriesScreen = () => {
   const { user } = useUser();
   const colorScheme = useColorScheme();
   const isDark = colorScheme === 'dark';
+  const { width } = useWindowDimensions();
+  const isCompact = width < 720;
   const [refreshing, setRefreshing] = useState(false);
   const [sortBy, setSortBy] = useState<'starred_at' | 'name' | 'stars' | 'updated'>('starred_at');
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc');
@@ -253,6 +257,9 @@ const RepositoriesScreen = () => {
       backgroundColor: isDark ? '#0f0f23' : '#f9fafb',
     },
     header: {
+      width: '100%',
+      maxWidth: 1200,
+      alignSelf: 'center',
       backgroundColor: isDark ? '#1a1a2e' : '#ffffff',
       paddingHorizontal: 20,
       paddingVertical: 16,
@@ -284,6 +291,9 @@ const RepositoriesScreen = () => {
       marginTop: 2,
     },
     toolbar: {
+      width: '100%',
+      maxWidth: 1200,
+      alignSelf: 'center',
       backgroundColor: isDark ? '#1a1a2e' : '#ffffff',
       flexDirection: 'row',
       paddingHorizontal: 20,
@@ -296,7 +306,8 @@ const RepositoriesScreen = () => {
     toolbarLeft: {
       flexDirection: 'row',
       alignItems: 'center',
-      gap: 16,
+      gap: 8,
+      paddingRight: 12,
     },
     toolbarButton: {
       flexDirection: 'row',
@@ -323,6 +334,9 @@ const RepositoriesScreen = () => {
       color: '#ffffff',
     },
     filterChipsContainer: {
+      width: '100%',
+      maxWidth: 1200,
+      alignSelf: 'center',
       paddingHorizontal: 20,
       backgroundColor: isDark ? '#1a1a2e' : '#ffffff',
       borderBottomWidth: 1,
@@ -338,8 +352,14 @@ const RepositoriesScreen = () => {
     },
     content: {
       flex: 1,
+      width: '100%',
+      maxWidth: 1200,
+      alignSelf: 'center',
     },
     repositoryList: {
+      width: '100%',
+      maxWidth: 980,
+      alignSelf: 'center',
       paddingHorizontal: 20,
       paddingTop: 16,
     },
@@ -406,7 +426,12 @@ const RepositoriesScreen = () => {
       <Text style={styles.emptyDescription}>
         Start by syncing your GitHub starred repositories or star some repositories on GitHub to get started.
       </Text>
-      <Pressable style={styles.syncButton} onPress={() => router.push('/(tabs)/sync')}>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel="Open GitHub sync"
+        style={styles.syncButton}
+        onPress={() => router.push('/(tabs)/sync')}
+      >
         <Feather name="refresh-cw" size={16} color="#ffffff" />
         <Text style={styles.syncButtonText}>Sync Now</Text>
       </Pressable>
@@ -438,39 +463,68 @@ const RepositoriesScreen = () => {
       </View>
 
       <View style={styles.toolbar}>
-        <View style={styles.toolbarLeft}>
-          <Pressable style={styles.toolbarButton} onPress={showSortOptions}>
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={styles.toolbarLeft}
+        >
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Sort repositories"
+            style={styles.toolbarButton}
+            onPress={showSortOptions}
+          >
             <Feather name="sliders" size={16} color={isDark ? '#ffffff' : '#374151'} />
             <Text style={styles.toolbarButtonText}>Sort</Text>
           </Pressable>
           
-          <Pressable style={styles.toolbarButton} onPress={handleCategoryPress}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Open categories"
+            style={styles.toolbarButton}
+            onPress={handleCategoryPress}
+          >
             <Feather name="folder" size={16} color={isDark ? '#ffffff' : '#374151'} />
             <Text style={styles.toolbarButtonText}>Categories</Text>
           </Pressable>
 
-          <Pressable style={styles.toolbarButton} onPress={handleOpenAISettings}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Open AI settings"
+            style={styles.toolbarButton}
+            onPress={handleOpenAISettings}
+          >
             <Feather name="settings" size={16} color={isDark ? '#ffffff' : '#374151'} />
             <Text style={styles.toolbarButtonText}>AI</Text>
           </Pressable>
 
-          <Pressable style={styles.toolbarButton} onPress={() => setListsModalVisible(true)}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Manage lists"
+            style={styles.toolbarButton}
+            onPress={() => setListsModalVisible(true)}
+          >
             <Feather name="layers" size={16} color={isDark ? '#ffffff' : '#374151'} />
             <Text style={styles.toolbarButtonText}>Lists</Text>
           </Pressable>
 
           <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Show only uncategorized repositories"
+            accessibilityState={{ selected: uncategorizedOnly }}
             style={[styles.toolbarButton, uncategorizedOnly && styles.toolbarButtonActive]}
             onPress={() => setUncategorizedOnly(!uncategorizedOnly)}
           >
             <Feather name="inbox" size={16} color={uncategorizedOnly ? '#ffffff' : isDark ? '#ffffff' : '#374151'} />
             <Text style={[styles.toolbarButtonText, uncategorizedOnly && styles.toolbarButtonTextActive]}>Unsorted</Text>
           </Pressable>
-        </View>
+        </ScrollView>
 
-        <Text style={styles.resultCount}>
-          {displayedRepositories.length} repositories
-        </Text>
+        {!isCompact && (
+          <Text style={styles.resultCount}>
+            {displayedRepositories.length} repositories
+          </Text>
+        )}
       </View>
 
       {/* Quick Filter Chips */}

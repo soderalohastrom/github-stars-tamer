@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Star Shelf</title>
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body class="popup-body">
+    <main class="shelf" aria-labelledby="page-title">
+      <header class="masthead">
+        <div>
+          <p class="eyebrow">GITHUB STARRED</p>
+          <h1 id="page-title">Star Shelf</h1>
+        </div>
+        <button class="icon-button" id="settings-button" type="button" aria-label="Open settings" title="Settings">⚙</button>
+      </header>
+
+      <section class="sync-card" aria-live="polite">
+        <div class="sync-copy">
+          <span class="status-dot" id="status-dot" aria-hidden="true"></span>
+          <p id="sync-message">Loading your shelf…</p>
+        </div>
+        <button class="primary-button" id="import-button" type="button">Sync now</button>
+      </section>
+
+      <section class="overview" aria-label="Shelf overview">
+        <div class="total-card"><strong id="repository-count">—</strong><span>saved repos</span></div>
+        <div class="category-grid" id="category-summary"></div>
+      </section>
+
+      <div class="toolbar">
+        <label class="search-field"><span class="sr-only">Search repositories</span><input id="search-input" type="search" placeholder="Filter your shelf" autocomplete="off"></label>
+        <label class="select-field"><span class="sr-only">Filter by category</span><select id="category-filter"><option value="All">All categories</option></select></label>
+      </div>
+
+      <section aria-label="Repositories">
+        <div class="list-heading"><span id="visible-count">Your shelf</span><span class="sort-label">Newest saved first</span></div>
+        <div id="repository-list" class="repository-list"></div>
+        <div id="empty-state" class="empty-state" hidden>
+          <p class="empty-mark">✦</p>
+          <h2>Your shelf is waiting.</h2>
+          <p>Connect a GitHub token in Settings, then sync the repositories you have starred.</p>
+          <button class="secondary-button" id="empty-settings-button" type="button">Set up GitHub</button>
+        </div>
+      </section>
+
+      <footer><span>Private by design</span><span aria-hidden="true">·</span><button id="privacy-button" type="button">How data stays local</button></footer>
+    </main>
+    <script src="categorizer.js"></script>
+    <script src="storage.js"></script>
+    <script src="popup.js"></script>
+  </body>
+</html>

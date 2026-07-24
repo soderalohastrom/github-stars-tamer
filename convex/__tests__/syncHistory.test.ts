@@ -3,11 +3,11 @@ import { api, internal } from "../_generated/api";
 import { createTestConvex } from "./setup.test-helper";
 
 async function setupUser(t: any, clerkUserId = "clerk_123") {
-  await t.mutation(api.users.upsertUserFromClerk, {
+  await t.withIdentity({ subject: clerkUserId }).mutation(api.users.upsertUserFromClerk, {
     clerkUserId,
     email: `${clerkUserId}@example.com`,
   });
-  const profile = await t.query(api.users.getUserProfile, { clerkUserId });
+  const profile = await t.withIdentity({ subject: clerkUserId }).query(api.users.getUserProfile, { clerkUserId });
   return { clerkUserId, userId: profile!._id };
 }
 
@@ -24,7 +24,7 @@ describe("syncHistory", () => {
 
       expect(syncId).toBeDefined();
 
-      const history = await t.query(api.syncHistory.getSyncHistory, {
+      const history = await t.withIdentity({ subject: clerkUserId }).query(api.syncHistory.getSyncHistory, {
         clerkUserId,
       });
       expect(history.length).toBe(1);
@@ -54,7 +54,7 @@ describe("syncHistory", () => {
         totalApiCalls: 2,
       });
 
-      const history = await t.query(api.syncHistory.getSyncHistory, {
+      const history = await t.withIdentity({ subject: clerkUserId }).query(api.syncHistory.getSyncHistory, {
         clerkUserId,
       });
       expect(history[0].status).toBe("completed");
@@ -80,7 +80,7 @@ describe("syncHistory", () => {
         errorMessage: "Rate limit exceeded",
       });
 
-      const history = await t.query(api.syncHistory.getSyncHistory, {
+      const history = await t.withIdentity({ subject: clerkUserId }).query(api.syncHistory.getSyncHistory, {
         clerkUserId,
       });
       expect(history[0].status).toBe("failed");
@@ -103,7 +103,7 @@ describe("syncHistory", () => {
         syncType: "incremental",
       });
 
-      const history = await t.query(api.syncHistory.getSyncHistory, {
+      const history = await t.withIdentity({ subject: clerkUserId }).query(api.syncHistory.getSyncHistory, {
         clerkUserId,
       });
       expect(history.length).toBe(2);
@@ -122,7 +122,7 @@ describe("syncHistory", () => {
         });
       }
 
-      const history = await t.query(api.syncHistory.getSyncHistory, {
+      const history = await t.withIdentity({ subject: clerkUserId }).query(api.syncHistory.getSyncHistory, {
         clerkUserId,
         limit: 2,
       });
@@ -152,7 +152,7 @@ describe("syncHistory", () => {
         repositoriesRemoved: 0,
       });
 
-      const latest = await t.query(api.syncHistory.getLatestSyncStatus, {
+      const latest = await t.withIdentity({ subject: clerkUserId }).query(api.syncHistory.getLatestSyncStatus, {
         clerkUserId,
       });
       expect(latest).not.toBeNull();
@@ -164,7 +164,7 @@ describe("syncHistory", () => {
       const t = createTestConvex();
       const { clerkUserId } = await setupUser(t);
 
-      const latest = await t.query(api.syncHistory.getLatestSyncStatus, {
+      const latest = await t.withIdentity({ subject: clerkUserId }).query(api.syncHistory.getLatestSyncStatus, {
         clerkUserId,
       });
       expect(latest).toBeNull();

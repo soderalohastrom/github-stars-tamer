@@ -138,3 +138,17 @@ Clerk requires:
 - **Location:** `convex/__tests__/*.test.ts`
 - **Run:** `npm run test` (all) or `npx vitest run convex/__tests__/<file>.test.ts` (specific)
 - **Verify script:** `scripts/verify.sh` — finds affected tests via codegraph, runs only those
+
+<!-- convex-ai-start -->
+
+This project uses [Convex](https://convex.dev) as its backend.
+
+When working on Convex code, **always read
+`convex/_generated/ai/guidelines.md` first** for important guidelines on
+how to correctly use Convex APIs and patterns. The file contains rules that
+override what you may have learned about Convex from training data.
+
+Convex agent skills for common tasks can be installed by running
+`npx convex ai-files install`.
+
+<!-- convex-ai-end -->

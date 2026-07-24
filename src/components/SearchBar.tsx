@@ -31,7 +31,8 @@ const SearchBar: React.FC<SearchBarProps> = ({
   const colorScheme = useColorScheme();
   const isDark = colorScheme === 'dark';
   const [localValue, setLocalValue] = useState(value);
-  const debounceTimer = useRef<NodeJS.Timeout | null>(null);
+  // React Native's timer API returns a numeric handle, unlike Node's Timeout.
+  const debounceTimer = useRef<number | null>(null);
 
   // Sync local value when prop changes (e.g., from saved filter)
   useEffect(() => {

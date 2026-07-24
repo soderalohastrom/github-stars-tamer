@@ -395,7 +395,7 @@ const AISuggestionsReview: React.FC<AISuggestionsReviewProps> = ({
       color: isDark ? '#D1D5DB' : '#374151',
     },
     loadingOverlay: {
-      ...StyleSheet.absoluteFillObject,
+      ...StyleSheet.absoluteFill,
       backgroundColor: 'rgba(0, 0, 0, 0.5)',
       alignItems: 'center',
       justifyContent: 'center',

@@ -3,11 +3,11 @@ import { api, internal } from "../_generated/api";
 import { createTestConvex } from "./setup.test-helper";
 
 async function setupUser(t: any, clerkUserId = "clerk_123") {
-  await t.mutation(api.users.upsertUserFromClerk, {
+  await t.withIdentity({ subject: clerkUserId }).mutation(api.users.upsertUserFromClerk, {
     clerkUserId,
     email: `${clerkUserId}@example.com`,
   });
-  const profile = await t.query(api.users.getUserProfile, { clerkUserId });
+  const profile = await t.withIdentity({ subject: clerkUserId }).query(api.users.getUserProfile, { clerkUserId });
   return { clerkUserId, userId: profile!._id };
 }
 
@@ -39,7 +39,7 @@ async function insertRepo(t: any, userId: any, clerkUserId: string, overrides: a
       owner: overrides.owner ?? { login: "owner", id: 1, avatarUrl: "https://avatar.example.com", type: "User" },
     }],
   });
-  const repos = await t.query(api.repositories.getUserRepositories, { clerkUserId });
+  const repos = await t.withIdentity({ subject: clerkUserId }).query(api.repositories.getUserRepositories, { clerkUserId });
   return repos.find((r: any) => r.githubId === githubId)!._id;
 }
 
@@ -77,7 +77,7 @@ describe("knowledge", () => {
       const t = createTestConvex();
       const { clerkUserId } = await setupUser(t);
 
-      const pages = await t.query(api.knowledge.getKnowledgePages, { clerkUserId });
+      const pages = await t.withIdentity({ subject: clerkUserId }).query(api.knowledge.getKnowledgePages, { clerkUserId });
       expect(pages).toEqual([]);
     });
 
@@ -96,7 +96,7 @@ describe("knowledge", () => {
         summary: "A great library",
       });
 
-      const pages = await t.query(api.knowledge.getKnowledgePages, { clerkUserId });
+      const pages = await t.withIdentity({ subject: clerkUserId }).query(api.knowledge.getKnowledgePages, { clerkUserId });
       expect(pages.length).toBe(1);
       expect(pages[0].summary).toBe("A great library");
       expect(pages[0].repository).not.toBeNull();
@@ -113,7 +113,7 @@ describe("knowledge", () => {
 
       await insertKnowledgePage(t, userId1, repoId);
 
-      const user2Pages = await t.query(api.knowledge.getKnowledgePages, { clerkUserId: user2 });
+      const user2Pages = await t.withIdentity({ subject: user2 }).query(api.knowledge.getKnowledgePages, { clerkUserId: user2 });
       expect(user2Pages).toEqual([]);
     });
   });
@@ -124,7 +124,7 @@ describe("knowledge", () => {
       const { clerkUserId, userId } = await setupUser(t);
       const repoId = await insertRepo(t, userId, clerkUserId);
 
-      const page = await t.query(api.knowledge.getKnowledgePage, {
+      const page = await t.withIdentity({ subject: clerkUserId }).query(api.knowledge.getKnowledgePage, {
         clerkUserId,
         repositoryId: repoId,
       });
@@ -146,7 +146,7 @@ describe("knowledge", () => {
         }],
       });
 
-      const page = await t.query(api.knowledge.getKnowledgePage, {
+      const page = await t.withIdentity({ subject: clerkUserId }).query(api.knowledge.getKnowledgePage, {
         clerkUserId,
         repositoryId: repo1,
       });
@@ -162,7 +162,7 @@ describe("knowledge", () => {
       const t = createTestConvex();
       const { clerkUserId } = await setupUser(t);
 
-      const graph = await t.query(api.knowledge.getGraphData, { clerkUserId });
+      const graph = await t.withIdentity({ subject: clerkUserId }).query(api.knowledge.getGraphData, { clerkUserId });
       expect(graph.nodes).toEqual([]);
       expect(graph.edges).toEqual([]);
     });
@@ -184,7 +184,7 @@ describe("knowledge", () => {
         summary: "Processed repo summary",
       });
 
-      const graph = await t.query(api.knowledge.getGraphData, { clerkUserId });
+      const graph = await t.withIdentity({ subject: clerkUserId }).query(api.knowledge.getGraphData, { clerkUserId });
       expect(graph.nodes.length).toBe(2);
 
       const processedNode = graph.nodes.find((n: any) => n.label === "owner/processed-repo");
@@ -216,7 +216,7 @@ describe("knowledge", () => {
         }],
       });
 
-      const graph = await t.query(api.knowledge.getGraphData, { clerkUserId });
+      const graph = await t.withIdentity({ subject: clerkUserId }).query(api.knowledge.getGraphData, { clerkUserId });
       expect(graph.edges.length).toBe(1);
       expect(graph.edges[0].edgeType).toBe("shared_language");
     });
@@ -227,7 +227,7 @@ describe("knowledge", () => {
       const t = createTestConvex();
       const { clerkUserId } = await setupUser(t);
 
-      const status = await t.query(api.knowledge.getKnowledgeStatus, { clerkUserId });
+      const status = await t.withIdentity({ subject: clerkUserId }).query(api.knowledge.getKnowledgeStatus, { clerkUserId });
       expect(status).toEqual({ total: 0, processed: 0, failed: 0, noReadme: 0, unprocessed: 0 });
     });
 
@@ -244,7 +244,7 @@ describe("knowledge", () => {
       await insertKnowledgePage(t, userId, repo3, { status: "no_readme" });
       // repo4 has no knowledge page (unprocessed)
 
-      const status = await t.query(api.knowledge.getKnowledgeStatus, { clerkUserId });
+      const status = await t.withIdentity({ subject: clerkUserId }).query(api.knowledge.getKnowledgeStatus, { clerkUserId });
       expect(status.total).toBe(4);
       expect(status.processed).toBe(1);
       expect(status.failed).toBe(1);
@@ -258,7 +258,7 @@ describe("knowledge", () => {
       const t = createTestConvex();
       const { clerkUserId } = await setupUser(t);
 
-      const results = await t.query(api.knowledge.searchKnowledge, {
+      const results = await t.withIdentity({ subject: clerkUserId }).query(api.knowledge.searchKnowledge, {
         clerkUserId,
         searchText: "nonexistent",
       });
@@ -278,7 +278,7 @@ describe("knowledge", () => {
         summary: "Force-directed graph visualization library",
       });
 
-      const results = await t.query(api.knowledge.searchKnowledge, {
+      const results = await t.withIdentity({ subject: clerkUserId }).query(api.knowledge.searchKnowledge, {
         clerkUserId,
         searchText: "force-directed graph",
       });
@@ -295,7 +295,7 @@ describe("knowledge", () => {
       const { clerkUserId } = await setupUser(t);
 
       await expect(
-        t.mutation(api.knowledge.startKnowledgeBuild, { clerkUserId })
+        t.withIdentity({ subject: clerkUserId }).mutation(api.knowledge.startKnowledgeBuild, { clerkUserId })
       ).rejects.toThrow("AI features are not enabled");
     });
 
@@ -304,7 +304,7 @@ describe("knowledge", () => {
       const { clerkUserId, userId } = await setupUser(t);
 
       // Enable AI
-      await t.mutation(api.ai.updateAiSettings, {
+      await t.withIdentity({ subject: clerkUserId }).mutation(api.ai.updateAiSettings, {
         clerkUserId,
         enableAI: true,
         aiProvider: "claude",
@@ -315,7 +315,7 @@ describe("knowledge", () => {
       await insertKnowledgePage(t, userId, repoId, { status: "processed" });
 
       await expect(
-        t.mutation(api.knowledge.startKnowledgeBuild, { clerkUserId })
+        t.withIdentity({ subject: clerkUserId }).mutation(api.knowledge.startKnowledgeBuild, { clerkUserId })
       ).rejects.toThrow("All repositories have already been processed");
     });
 
@@ -323,7 +323,7 @@ describe("knowledge", () => {
       const t = createTestConvex();
       const { clerkUserId, userId } = await setupUser(t);
 
-      await t.mutation(api.ai.updateAiSettings, {
+      await t.withIdentity({ subject: clerkUserId }).mutation(api.ai.updateAiSettings, {
         clerkUserId,
         enableAI: true,
         aiProvider: "claude",
@@ -335,7 +335,7 @@ describe("knowledge", () => {
       // Process repo1 — repo2 should be the one scheduled
       await insertKnowledgePage(t, userId, repo1, { status: "processed" });
 
-      const result = await t.mutation(api.knowledge.startKnowledgeBuild, { clerkUserId });
+      const result = await t.withIdentity({ subject: clerkUserId }).mutation(api.knowledge.startKnowledgeBuild, { clerkUserId });
       expect(result.totalToProcess).toBe(1);
       expect(result.jobId).toBeDefined();
       expect(result.batchId).toMatch(/^kb_/);
@@ -347,7 +347,7 @@ describe("knowledge", () => {
       const t = createTestConvex();
       const { clerkUserId, userId } = await setupUser(t);
 
-      await t.mutation(api.ai.updateAiSettings, {
+      await t.withIdentity({ subject: clerkUserId }).mutation(api.ai.updateAiSettings, {
         clerkUserId,
         enableAI: true,
         aiProvider: "claude",
@@ -362,7 +362,7 @@ describe("knowledge", () => {
         status: "processed",
       });
 
-      const result = await t.mutation(api.knowledge.startKnowledgeUpdate, { clerkUserId });
+      const result = await t.withIdentity({ subject: clerkUserId }).mutation(api.knowledge.startKnowledgeUpdate, { clerkUserId });
       expect(result.totalToProcess).toBe(0);
       expect(result.jobId).toBeNull();
     });
@@ -371,7 +371,7 @@ describe("knowledge", () => {
       const t = createTestConvex();
       const { clerkUserId, userId } = await setupUser(t);
 
-      await t.mutation(api.ai.updateAiSettings, {
+      await t.withIdentity({ subject: clerkUserId }).mutation(api.ai.updateAiSettings, {
         clerkUserId,
         enableAI: true,
         aiProvider: "claude",
@@ -393,7 +393,7 @@ describe("knowledge", () => {
         starredAt: "2024-12-01T00:00:00Z",
       });
 
-      const result = await t.mutation(api.knowledge.startKnowledgeUpdate, { clerkUserId });
+      const result = await t.withIdentity({ subject: clerkUserId }).mutation(api.knowledge.startKnowledgeUpdate, { clerkUserId });
       expect(result.totalToProcess).toBe(1);
     });
   });
@@ -424,7 +424,7 @@ describe("knowledge", () => {
 
       expect(knowledgeId).toBeDefined();
 
-      const page = await t.query(api.knowledge.getKnowledgePage, {
+      const page = await t.withIdentity({ subject: clerkUserId }).query(api.knowledge.getKnowledgePage, {
         clerkUserId,
         repositoryId: repoId,
       });
@@ -467,7 +467,7 @@ describe("knowledge", () => {
       });
 
       // Should only have one page with updated content
-      const pages = await t.query(api.knowledge.getKnowledgePages, { clerkUserId });
+      const pages = await t.withIdentity({ subject: clerkUserId }).query(api.knowledge.getKnowledgePages, { clerkUserId });
       expect(pages.length).toBe(1);
       expect(pages[0].summary).toBe("Updated version");
       expect(pages[0].keyFeatures).toEqual(["New feature"]);
@@ -496,7 +496,7 @@ describe("knowledge", () => {
         markdownContent: "# Repo\n\n## Related Repos\n\n- [[owner/repo-2]] — Both use React",
       });
 
-      const page = await t.query(api.knowledge.getKnowledgePage, {
+      const page = await t.withIdentity({ subject: clerkUserId }).query(api.knowledge.getKnowledgePage, {
         clerkUserId,
         repositoryId: repo1,
       });
@@ -530,7 +530,7 @@ describe("knowledge", () => {
       const t = createTestConvex();
       const { clerkUserId } = await setupUser(t);
 
-      const results = await t.query(api.knowledge.resolveWikilinks, {
+      const results = await t.withIdentity({ subject: clerkUserId }).query(api.knowledge.resolveWikilinks, {
         clerkUserId,
         fullNames: ['unknown/repo'],
       });
@@ -545,7 +545,7 @@ describe("knowledge", () => {
       const { clerkUserId, userId } = await setupUser(t);
       await insertRepo(t, userId, clerkUserId, { githubId: 10, fullName: 'owner/my-repo' });
 
-      const results = await t.query(api.knowledge.resolveWikilinks, {
+      const results = await t.withIdentity({ subject: clerkUserId }).query(api.knowledge.resolveWikilinks, {
         clerkUserId,
         fullNames: ['owner/my-repo'],
       });
@@ -562,7 +562,7 @@ describe("knowledge", () => {
       const repoId = await insertRepo(t, userId, clerkUserId, { githubId: 20, fullName: 'owner/known-repo' });
       await insertKnowledgePage(t, userId, repoId);
 
-      const results = await t.query(api.knowledge.resolveWikilinks, {
+      const results = await t.withIdentity({ subject: clerkUserId }).query(api.knowledge.resolveWikilinks, {
         clerkUserId,
         fullNames: ['owner/known-repo'],
       });
@@ -580,7 +580,7 @@ describe("knowledge", () => {
       await insertKnowledgePage(t, userId, repoId);
       await insertRepo(t, userId, clerkUserId, { githubId: 31, fullName: 'owner/no-knowledge' });
 
-      const results = await t.query(api.knowledge.resolveWikilinks, {
+      const results = await t.withIdentity({ subject: clerkUserId }).query(api.knowledge.resolveWikilinks, {
         clerkUserId,
         fullNames: ['owner/with-knowledge', 'owner/no-knowledge', 'owner/not-starred'],
       });
@@ -595,7 +595,7 @@ describe("knowledge", () => {
       const t = createTestConvex();
       const { clerkUserId } = await setupUser(t);
 
-      const results = await t.query(api.knowledge.resolveWikilinks, {
+      const results = await t.withIdentity({ subject: clerkUserId }).query(api.knowledge.resolveWikilinks, {
         clerkUserId,
         fullNames: [],
       });
@@ -603,15 +603,15 @@ describe("knowledge", () => {
       expect(results).toHaveLength(0);
     });
 
-    test('returns empty array for unknown user', async () => {
+    test('rejects a non-existent authenticated user', async () => {
       const t = createTestConvex();
 
-      const results = await t.query(api.knowledge.resolveWikilinks, {
-        clerkUserId: 'nonexistent_user',
-        fullNames: ['owner/repo'],
-      });
-
-      expect(results).toHaveLength(0);
+      await expect(
+        t.withIdentity({ subject: 'nonexistent_user' }).query(api.knowledge.resolveWikilinks, {
+          clerkUserId: 'nonexistent_user',
+          fullNames: ['owner/repo'],
+        })
+      ).rejects.toThrow('User not found');
     });
   });
 });

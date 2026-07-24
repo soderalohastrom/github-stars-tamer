@@ -3,11 +3,11 @@ import { api, internal } from "../_generated/api";
 import { createTestConvex } from "./setup.test-helper";
 
 async function setupUser(t: any, clerkUserId = "clerk_123") {
-  await t.mutation(api.users.upsertUserFromClerk, {
+  await t.withIdentity({ subject: clerkUserId }).mutation(api.users.upsertUserFromClerk, {
     clerkUserId,
     email: `${clerkUserId}@example.com`,
   });
-  const profile = await t.query(api.users.getUserProfile, { clerkUserId });
+  const profile = await t.withIdentity({ subject: clerkUserId }).query(api.users.getUserProfile, { clerkUserId });
   return { clerkUserId, userId: profile!._id };
 }
 
@@ -38,7 +38,7 @@ async function insertRepo(t: any, userId: any, clerkUserId: string, githubId = 1
       owner: { login: "owner", id: 1, avatarUrl: "https://avatar.example.com", type: "User" },
     }],
   });
-  const repos = await t.query(api.repositories.getUserRepositories, { clerkUserId });
+  const repos = await t.withIdentity({ subject: clerkUserId }).query(api.repositories.getUserRepositories, { clerkUserId });
   return repos.find((r: any) => r.githubId === githubId)!._id;
 }
 
@@ -66,38 +66,55 @@ describe("ai", () => {
       const t = createTestConvex();
       const { clerkUserId } = await setupUser(t);
 
-      const settings = await t.query(api.ai.getAiSettings, { clerkUserId });
+      const settings = await t.withIdentity({ subject: clerkUserId }).query(api.ai.getAiSettings, { clerkUserId });
       expect(settings).not.toBeNull();
-      expect(settings!.aiProvider).toBe("claude");
-      expect(settings!.aiModel).toBe("claude-haiku-4-5");
+      expect(settings!.aiProvider).toBe("cloudflare");
+      expect(settings!.aiModel).toBe("@cf/meta/llama-3.1-8b-instruct-fast");
       expect(settings!.enableAI).toBe(false);
       expect(settings!.batchSize).toBe(10);
       expect(settings!.confidenceThreshold).toBe(0.6);
     });
 
-    test("returns null for non-existent user", async () => {
+    test("rejects a non-existent authenticated user", async () => {
       const t = createTestConvex();
-      const settings = await t.query(api.ai.getAiSettings, {
-        clerkUserId: "nonexistent",
-      });
-      expect(settings).toBeNull();
+      await expect(
+        t.withIdentity({ subject: "nonexistent" }).query(api.ai.getAiSettings, {
+          clerkUserId: "nonexistent",
+        })
+      ).rejects.toThrow("User not found");
     });
 
     test("returns saved settings after update", async () => {
       const t = createTestConvex();
       const { clerkUserId } = await setupUser(t);
 
-      await t.mutation(api.ai.updateAiSettings, {
+      await t.withIdentity({ subject: clerkUserId }).mutation(api.ai.updateAiSettings, {
         clerkUserId,
         aiProvider: "openai",
         aiModel: "gpt-5.4-nano",
         enableAI: true,
       });
 
-      const settings = await t.query(api.ai.getAiSettings, { clerkUserId });
+      const settings = await t.withIdentity({ subject: clerkUserId }).query(api.ai.getAiSettings, { clerkUserId });
       expect(settings!.aiProvider).toBe("openai");
       expect(settings!.aiModel).toBe("gpt-5.4-nano");
       expect(settings!.enableAI).toBe(true);
+    });
+
+    test("supports Cloudflare as the default hosted provider", async () => {
+      const t = createTestConvex();
+      const { clerkUserId } = await setupUser(t);
+
+      await t.withIdentity({ subject: clerkUserId }).mutation(api.ai.updateAiSettings, {
+        clerkUserId,
+        aiProvider: "cloudflare",
+        aiModel: "@cf/meta/llama-3.1-8b-instruct-fast",
+        enableAI: true,
+      });
+
+      const settings = await t.withIdentity({ subject: clerkUserId }).query(api.ai.getAiSettings, { clerkUserId });
+      expect(settings!.aiProvider).toBe("cloudflare");
+      expect(settings!.aiModel).toBe("@cf/meta/llama-3.1-8b-instruct-fast");
     });
   });
 
@@ -106,7 +123,7 @@ describe("ai", () => {
       const t = createTestConvex();
       const { clerkUserId } = await setupUser(t);
 
-      const settingsId = await t.mutation(api.ai.updateAiSettings, {
+      const settingsId = await t.withIdentity({ subject: clerkUserId }).mutation(api.ai.updateAiSettings, {
         clerkUserId,
         aiProvider: "ollama",
         aiModel: "gemma:2b",
@@ -116,9 +133,9 @@ describe("ai", () => {
 
       expect(settingsId).toBeDefined();
 
-      const settings = await t.query(api.ai.getAiSettings, { clerkUserId });
+      const settings = await t.withIdentity({ subject: clerkUserId }).query(api.ai.getAiSettings, { clerkUserId });
       expect(settings!.aiProvider).toBe("ollama");
-      expect(settings!.ollamaEndpoint).toBe("http://localhost:11434");
+      expect("ollamaEndpoint" in settings! && settings!.ollamaEndpoint).toBe("http://localhost:11434");
     });
 
     test("updates existing settings with partial data", async () => {
@@ -126,7 +143,7 @@ describe("ai", () => {
       const { clerkUserId } = await setupUser(t);
 
       // Create initial
-      await t.mutation(api.ai.updateAiSettings, {
+      await t.withIdentity({ subject: clerkUserId }).mutation(api.ai.updateAiSettings, {
         clerkUserId,
         aiProvider: "claude",
         aiModel: "claude-haiku-4-5",
@@ -134,25 +151,25 @@ describe("ai", () => {
       });
 
       // Partial update
-      await t.mutation(api.ai.updateAiSettings, {
+      await t.withIdentity({ subject: clerkUserId }).mutation(api.ai.updateAiSettings, {
         clerkUserId,
         enableAI: true,
         batchSize: 20,
       });
 
-      const settings = await t.query(api.ai.getAiSettings, { clerkUserId });
+      const settings = await t.withIdentity({ subject: clerkUserId }).query(api.ai.getAiSettings, { clerkUserId });
       expect(settings!.aiProvider).toBe("claude"); // unchanged
       expect(settings!.enableAI).toBe(true); // updated
       expect(settings!.batchSize).toBe(20); // updated
     });
 
-    test("throws without user ID", async () => {
+    test("uses the authenticated user when the legacy user ID is omitted", async () => {
       const t = createTestConvex();
-      await expect(
-        t.mutation(api.ai.updateAiSettings, {
+      const { clerkUserId } = await setupUser(t);
+      const settingsId = await t.withIdentity({ subject: clerkUserId }).mutation(api.ai.updateAiSettings, {
           enableAI: true,
-        })
-      ).rejects.toThrow("User ID is required");
+      });
+      expect(settingsId).toBeDefined();
     });
   });
 
@@ -167,7 +184,7 @@ describe("ai", () => {
         suggestedCategoryColor: "#ff00ff",
       });
 
-      const result = await t.mutation(api.ai.applySuggestion, {
+      const result = await t.withIdentity({ subject: clerkUserId }).mutation(api.ai.applySuggestion, {
         clerkUserId,
         suggestionId,
       });
@@ -176,7 +193,7 @@ describe("ai", () => {
       expect(result.categoryId).toBeDefined();
 
       // Verify category was created
-      const categories = await t.query(api.categories.getUserCategories, { clerkUserId });
+      const categories = await t.withIdentity({ subject: clerkUserId }).query(api.categories.getUserCategories, { clerkUserId });
       const newCat = categories.find((c: any) => c.name === "New AI Category");
       expect(newCat).toBeDefined();
 
@@ -191,7 +208,7 @@ describe("ai", () => {
       const repoId = await insertRepo(t, userId, clerkUserId);
 
       // Pre-create the category
-      await t.mutation(api.categories.createCategory, {
+      await t.withIdentity({ subject: clerkUserId }).mutation(api.categories.createCategory, {
         clerkUserId,
         name: "Existing Cat",
         color: "#abcdef",
@@ -201,13 +218,13 @@ describe("ai", () => {
         suggestedCategoryName: "Existing Cat",
       });
 
-      await t.mutation(api.ai.applySuggestion, {
+      await t.withIdentity({ subject: clerkUserId }).mutation(api.ai.applySuggestion, {
         clerkUserId,
         suggestionId,
       });
 
       // Should not create a duplicate
-      const categories = await t.query(api.categories.getUserCategories, { clerkUserId });
+      const categories = await t.withIdentity({ subject: clerkUserId }).query(api.categories.getUserCategories, { clerkUserId });
       const matching = categories.filter((c: any) => c.name === "Existing Cat");
       expect(matching.length).toBe(1);
     });
@@ -222,7 +239,7 @@ describe("ai", () => {
       });
 
       await expect(
-        t.mutation(api.ai.applySuggestion, {
+        t.withIdentity({ subject: clerkUserId }).mutation(api.ai.applySuggestion, {
           clerkUserId,
           suggestionId,
         })
@@ -238,7 +255,7 @@ describe("ai", () => {
 
       const suggestionId = await insertSuggestion(t, userId, repoId);
 
-      const result = await t.mutation(api.ai.rejectSuggestion, {
+      const result = await t.withIdentity({ subject: clerkUserId }).mutation(api.ai.rejectSuggestion, {
         clerkUserId,
         suggestionId,
       });
@@ -261,16 +278,17 @@ describe("ai", () => {
       await insertSuggestion(t, userId, repoId, { status: "applied", suggestedCategoryName: "Cat3" });
       await insertSuggestion(t, userId, repoId, { status: "rejected", suggestedCategoryName: "Cat4" });
 
-      const count = await t.query(api.ai.getPendingSuggestionsCount, { clerkUserId });
+      const count = await t.withIdentity({ subject: clerkUserId }).query(api.ai.getPendingSuggestionsCount, { clerkUserId });
       expect(count).toBe(2);
     });
 
-    test("returns 0 for non-existent user", async () => {
+    test("rejects a non-existent authenticated user", async () => {
       const t = createTestConvex();
-      const count = await t.query(api.ai.getPendingSuggestionsCount, {
-        clerkUserId: "nonexistent",
-      });
-      expect(count).toBe(0);
+      await expect(
+        t.withIdentity({ subject: "nonexistent" }).query(api.ai.getPendingSuggestionsCount, {
+          clerkUserId: "nonexistent",
+        })
+      ).rejects.toThrow("User not found");
     });
   });
 
@@ -306,19 +324,20 @@ describe("ai", () => {
         });
       });
 
-      const stats = await t.query(api.ai.getUsageStats, { clerkUserId });
+      const stats = await t.withIdentity({ subject: clerkUserId }).query(api.ai.getUsageStats, { clerkUserId });
       expect(stats).not.toBeNull();
       expect(stats!.totalTokens).toBe(1100);
       expect(stats!.requestCount).toBe(2);
       expect(stats!.totalCost).toBeGreaterThan(0);
     });
 
-    test("returns null for non-existent user", async () => {
+    test("rejects a non-existent authenticated user", async () => {
       const t = createTestConvex();
-      const stats = await t.query(api.ai.getUsageStats, {
-        clerkUserId: "nonexistent",
-      });
-      expect(stats).toBeNull();
+      await expect(
+        t.withIdentity({ subject: "nonexistent" }).query(api.ai.getUsageStats, {
+          clerkUserId: "nonexistent",
+        })
+      ).rejects.toThrow("User not found");
     });
   });
 
@@ -327,7 +346,7 @@ describe("ai", () => {
       const t = createTestConvex();
       const { clerkUserId } = await setupUser(t);
 
-      const result = await t.mutation(api.ai.saveTaxonomyAsCategories, {
+      const result = await t.withIdentity({ subject: clerkUserId }).mutation(api.ai.saveTaxonomyAsCategories, {
         clerkUserId,
         categories: [
           { name: "Frontend", description: "UI frameworks", color: "#3b82f6" },
@@ -338,7 +357,7 @@ describe("ai", () => {
       expect(result.created).toEqual(["Frontend", "Backend"]);
       expect(result.skipped).toEqual([]);
 
-      const categories = await t.query(api.categories.getUserCategories, { clerkUserId });
+      const categories = await t.withIdentity({ subject: clerkUserId }).query(api.categories.getUserCategories, { clerkUserId });
       const names = categories.map((c: any) => c.name);
       expect(names).toContain("Frontend");
       expect(names).toContain("Backend");
@@ -349,7 +368,7 @@ describe("ai", () => {
       const { clerkUserId } = await setupUser(t);
 
       // "Learning" is a default category created with the user
-      const result = await t.mutation(api.ai.saveTaxonomyAsCategories, {
+      const result = await t.withIdentity({ subject: clerkUserId }).mutation(api.ai.saveTaxonomyAsCategories, {
         clerkUserId,
         categories: [
           { name: "Learning", description: "Already exists", color: "#ff0000" },
@@ -367,7 +386,7 @@ describe("ai", () => {
 
       // Default categories exist (Learning, Tools, Inspiration, Work)
       // None have repos assigned, so clearExisting should remove them
-      const result = await t.mutation(api.ai.saveTaxonomyAsCategories, {
+      const result = await t.withIdentity({ subject: clerkUserId }).mutation(api.ai.saveTaxonomyAsCategories, {
         clerkUserId,
         categories: [
           { name: "AI", description: "AI repos", color: "#6366f1" },
@@ -377,7 +396,7 @@ describe("ai", () => {
 
       expect(result.created).toEqual(["AI"]);
 
-      const categories = await t.query(api.categories.getUserCategories, { clerkUserId });
+      const categories = await t.withIdentity({ subject: clerkUserId }).query(api.categories.getUserCategories, { clerkUserId });
       // Only the new one should remain (defaults were cleared)
       expect(categories.length).toBe(1);
       expect(categories[0].name).toBe("AI");

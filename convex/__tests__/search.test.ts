@@ -5,11 +5,11 @@ import { buildSearchText } from "../search";
 
 // Helper to set up a user
 async function setupUser(t: any, clerkUserId = "clerk_123") {
-  await t.mutation(api.users.upsertUserFromClerk, {
+  await t.withIdentity({ subject: clerkUserId }).mutation(api.users.upsertUserFromClerk, {
     clerkUserId,
     email: `${clerkUserId}@example.com`,
   });
-  const profile = await t.query(api.users.getUserProfile, { clerkUserId });
+  const profile = await t.withIdentity({ subject: clerkUserId }).query(api.users.getUserProfile, { clerkUserId });
   return { clerkUserId, userId: profile!._id };
 }
 
@@ -96,14 +96,13 @@ describe("search", () => {
   });
 
   describe("searchRepositories (query)", () => {
-    test("returns empty results for non-existent user", async () => {
+    test("rejects a non-existent authenticated user", async () => {
       const t = createTestConvex();
-      const result = await t.query(api.search.searchRepositories, {
-        clerkUserId: "nonexistent",
-      });
-      expect(result.results).toEqual([]);
-      expect(result.totalCount).toBe(0);
-      expect(result.nextCursor).toBeNull();
+      await expect(
+        t.withIdentity({ subject: "nonexistent" }).query(api.search.searchRepositories, {
+          clerkUserId: "nonexistent",
+        })
+      ).rejects.toThrow("User not found");
     });
 
     test("returns all repos without query", async () => {
@@ -118,7 +117,7 @@ describe("search", () => {
         ],
       });
 
-      const result = await t.query(api.search.searchRepositories, { clerkUserId });
+      const result = await t.withIdentity({ subject: clerkUserId }).query(api.search.searchRepositories, { clerkUserId });
       expect(result.totalCount).toBe(2);
       expect(result.results.length).toBe(2);
     });
@@ -135,7 +134,7 @@ describe("search", () => {
         ],
       });
 
-      const result = await t.query(api.search.searchRepositories, {
+      const result = await t.withIdentity({ subject: clerkUserId }).query(api.search.searchRepositories, {
         clerkUserId,
         filters: { language: "Python" },
       });
@@ -155,7 +154,7 @@ describe("search", () => {
         ],
       });
 
-      const result = await t.query(api.search.searchRepositories, {
+      const result = await t.withIdentity({ subject: clerkUserId }).query(api.search.searchRepositories, {
         clerkUserId,
         filters: { minStars: 100 },
       });
@@ -174,7 +173,7 @@ describe("search", () => {
         ),
       });
 
-      const page1 = await t.query(api.search.searchRepositories, {
+      const page1 = await t.withIdentity({ subject: clerkUserId }).query(api.search.searchRepositories, {
         clerkUserId,
         limit: 3,
       });
@@ -182,7 +181,7 @@ describe("search", () => {
       expect(page1.nextCursor).not.toBeNull();
       expect(page1.totalCount).toBe(5);
 
-      const page2 = await t.query(api.search.searchRepositories, {
+      const page2 = await t.withIdentity({ subject: clerkUserId }).query(api.search.searchRepositories, {
         clerkUserId,
         limit: 3,
         cursor: page1.nextCursor!,
@@ -204,7 +203,7 @@ describe("search", () => {
         ],
       });
 
-      const result = await t.query(api.search.searchRepositories, {
+      const result = await t.withIdentity({ subject: clerkUserId }).query(api.search.searchRepositories, {
         clerkUserId,
         sort: { field: "stargazersCount", order: "asc" },
       });
@@ -222,23 +221,23 @@ describe("search", () => {
         repositories: [makeRepo({ githubId: 1, name: "categorized" })],
       });
 
-      const catId = await t.mutation(api.categories.createCategory, {
+      const catId = await t.withIdentity({ subject: clerkUserId }).mutation(api.categories.createCategory, {
         clerkUserId,
         name: "SearchCat",
         color: "#abcdef",
       });
 
       // Get repo ID, then categorize
-      const allRepos = await t.query(api.repositories.getUserRepositories, { clerkUserId });
-      await t.mutation(api.repositories.addRepositoryToCategory, {
+      const allRepos = await t.withIdentity({ subject: clerkUserId }).query(api.repositories.getUserRepositories, { clerkUserId });
+      await t.withIdentity({ subject: clerkUserId }).mutation(api.repositories.addRepositoryToCategory, {
         clerkUserId,
         repositoryId: allRepos[0]._id,
         categoryId: catId,
       });
 
-      const result = await t.query(api.search.searchRepositories, { clerkUserId });
-      expect(result.results[0].categories.length).toBe(1);
-      expect(result.results[0].categories[0].name).toBe("SearchCat");
+      const result = await t.withIdentity({ subject: clerkUserId }).query(api.search.searchRepositories, { clerkUserId });
+      expect(result.results[0].categories!.length).toBe(1);
+      expect(result.results[0].categories![0]!.name).toBe("SearchCat");
     });
   });
 
@@ -247,13 +246,13 @@ describe("search", () => {
       const t = createTestConvex();
       const { clerkUserId } = await setupUser(t);
 
-      await t.mutation(api.search.recordSearch, {
+      await t.withIdentity({ subject: clerkUserId }).mutation(api.search.recordSearch, {
         clerkUserId,
         query: "react hooks",
         resultCount: 5,
       });
 
-      const recent = await t.query(api.search.getRecentSearches, { clerkUserId });
+      const recent = await t.withIdentity({ subject: clerkUserId }).query(api.search.getRecentSearches, { clerkUserId });
       expect(recent.length).toBe(1);
       expect(recent[0].query).toBe("react hooks");
       expect(recent[0].resultCount).toBe(5);
@@ -265,23 +264,23 @@ describe("search", () => {
       const t = createTestConvex();
       const { clerkUserId } = await setupUser(t);
 
-      await t.mutation(api.search.recordSearch, {
+      await t.withIdentity({ subject: clerkUserId }).mutation(api.search.recordSearch, {
         clerkUserId,
         query: "react",
         resultCount: 10,
       });
-      await t.mutation(api.search.recordSearch, {
+      await t.withIdentity({ subject: clerkUserId }).mutation(api.search.recordSearch, {
         clerkUserId,
         query: "React",
         resultCount: 10,
       });
-      await t.mutation(api.search.recordSearch, {
+      await t.withIdentity({ subject: clerkUserId }).mutation(api.search.recordSearch, {
         clerkUserId,
         query: "vue",
         resultCount: 3,
       });
 
-      const recent = await t.query(api.search.getRecentSearches, { clerkUserId });
+      const recent = await t.withIdentity({ subject: clerkUserId }).query(api.search.getRecentSearches, { clerkUserId });
       // "react" and "React" should deduplicate (case-insensitive)
       const queries = recent.map((s: any) => s.query.toLowerCase());
       const uniqueQueries = [...new Set(queries)];
@@ -293,14 +292,14 @@ describe("search", () => {
       const { clerkUserId } = await setupUser(t);
 
       for (let i = 0; i < 5; i++) {
-        await t.mutation(api.search.recordSearch, {
+        await t.withIdentity({ subject: clerkUserId }).mutation(api.search.recordSearch, {
           clerkUserId,
           query: `query-${i}`,
           resultCount: i,
         });
       }
 
-      const recent = await t.query(api.search.getRecentSearches, {
+      const recent = await t.withIdentity({ subject: clerkUserId }).query(api.search.getRecentSearches, {
         clerkUserId,
         limit: 2,
       });
@@ -321,7 +320,7 @@ describe("search", () => {
         ],
       });
 
-      const result = await t.mutation(api.search.updateSearchTextForUser, {
+      const result = await t.withIdentity({ subject: clerkUserId }).mutation(api.search.updateSearchTextForUser, {
         clerkUserId,
       });
       expect(result.total).toBe(2);

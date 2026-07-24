@@ -1,6 +1,6 @@
 import { ConvexError, v } from "convex/values";
 import { internalMutation, internalQuery, mutation, query } from "./_generated/server";
-import { getUserByClerkIdHelper as getUserByClerkId } from "./users";
+import { assertUserOwns, requireAuthenticatedUser } from "./authz";
 import { buildSearchText } from "./search";
 
 // Get a single repository by its GitHub ID (internal)
@@ -10,6 +10,11 @@ export const getRepositoryByGitHubId = internalQuery({
     githubId: v.number(),
   },
   handler: async (ctx, args) => {
+    const user = await ctx.db.get(args.userId);
+    if (!user) {
+      throw new ConvexError("User not found");
+    }
+
     return await ctx.db
       .query("repositories")
       .withIndex("by_user_and_github_id", (q) =>
@@ -26,12 +31,17 @@ export const getRepository = query({
     repositoryId: v.id("repositories"),
   },
   handler: async (ctx, args) => {
+    const user = await requireAuthenticatedUser(ctx);
+    if (args.userId !== user._id) {
+      throw new ConvexError("Repository not found or access denied");
+    }
+
     const repository = await ctx.db.get(args.repositoryId);
-    
-    if (!repository || repository.userId !== args.userId) {
+    if (!repository) {
       return null;
     }
-    
+
+    assertUserOwns(repository.userId, user._id, "Repository");
     return repository;
   },
 });
@@ -59,16 +69,7 @@ export const getUserRepositories = query({
     limit: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
-    const user = await ctx.db
-      .query("users")
-      .withIndex("by_clerk_user_id", (q) => q.eq("clerkUserId", args.clerkUserId))
-      .first();
-      
-    if (!user) {
-      // Return empty array instead of throwing error
-      // This allows the app to work gracefully while UserInitializer creates the user
-      return [];
-    }
+    const user = await requireAuthenticatedUser(ctx, args.clerkUserId);
 
     let repositories = await ctx.db
       .query("repositories")
@@ -107,9 +108,17 @@ export const getUserRepositories = query({
       }
 
       if (categoryId) {
+        const category = await ctx.db.get(categoryId);
+        if (!category) {
+          throw new ConvexError("Category not found");
+        }
+        assertUserOwns(category.userId, user._id, "Category");
+
         const repoCategories = await ctx.db
           .query("repositoryCategories")
-          .withIndex("by_category_id", (q) => q.eq("categoryId", categoryId))
+          .withIndex("by_user_and_category", (q) =>
+            q.eq("userId", user._id).eq("categoryId", categoryId)
+          )
           .collect();
         
         const repoIds = new Set(repoCategories.map(rc => rc.repositoryId));
@@ -165,13 +174,15 @@ export const getUserRepositories = query({
       repositories.map(async (repo) => {
         const repoCategories = await ctx.db
           .query("repositoryCategories")
-          .withIndex("by_repository_id", (q) => q.eq("repositoryId", repo._id))
+          .withIndex("by_user_and_repository", (q) =>
+            q.eq("userId", user._id).eq("repositoryId", repo._id)
+          )
           .collect();
         
         const categories = await Promise.all(
           repoCategories.map(async (rc) => {
             const category = await ctx.db.get(rc.categoryId);
-            return category;
+            return category?.userId === user._id ? category : null;
           })
         );
         
@@ -227,6 +238,11 @@ export const upsertRepositories = internalMutation({
     })),
   },
   handler: async (ctx, { userId, repositories }) => {
+    const user = await ctx.db.get(userId);
+    if (!user) {
+      throw new ConvexError("User not found");
+    }
+
     const now = Date.now();
     let added = 0;
     let updated = 0;
@@ -285,10 +301,7 @@ export const addRepositoryToCategory = mutation({
     categoryId: v.id("categories"),
   },
   handler: async (ctx, args) => {
-    const user = await getUserByClerkId(ctx, args.clerkUserId);
-    if (!user) {
-      throw new ConvexError("User not found");
-    }
+    const user = await requireAuthenticatedUser(ctx, args.clerkUserId);
 
     // Verify repository and category belong to user
     const repository = await ctx.db.get(args.repositoryId);
@@ -305,20 +318,22 @@ export const addRepositoryToCategory = mutation({
     // Check if already exists
     const existing = await ctx.db
       .query("repositoryCategories")
-      .withIndex("by_user_and_repository", (q) => 
-        q.eq("userId", user._id).eq("repositoryId", args.repositoryId)
+      .withIndex("by_category_and_repository", (q) =>
+        q.eq("categoryId", args.categoryId).eq("repositoryId", args.repositoryId)
       )
-      .filter((q) => q.eq(q.field("categoryId"), args.categoryId))
       .first();
 
     if (existing) {
+      assertUserOwns(existing.userId, user._id, "Repository category");
       throw new ConvexError("Repository already in this category");
     }
 
     // Get sort order for category
     const categoryRepos = await ctx.db
       .query("repositoryCategories")
-      .withIndex("by_category_id", (q) => q.eq("categoryId", args.categoryId))
+      .withIndex("by_user_and_category", (q) =>
+        q.eq("userId", user._id).eq("categoryId", args.categoryId)
+      )
       .collect();
     
     const maxSortOrder = Math.max(...categoryRepos.map(cr => cr.sortOrder || 0), 0);
@@ -352,41 +367,49 @@ export const removeRepositoryFromCategory = mutation({
     categoryId: v.id("categories"),
   },
   handler: async (ctx, args) => {
-    const user = await getUserByClerkId(ctx, args.clerkUserId);
-    if (!user) {
-      throw new ConvexError("User not found");
+    const user = await requireAuthenticatedUser(ctx, args.clerkUserId);
+
+    const repository = await ctx.db.get(args.repositoryId);
+    if (!repository) {
+      throw new ConvexError("Repository not found");
     }
+    assertUserOwns(repository.userId, user._id, "Repository");
+
+    const category = await ctx.db.get(args.categoryId);
+    if (!category) {
+      throw new ConvexError("Category not found");
+    }
+    assertUserOwns(category.userId, user._id, "Category");
 
     const repoCategory = await ctx.db
       .query("repositoryCategories")
-      .withIndex("by_user_and_repository", (q) => 
-        q.eq("userId", user._id).eq("repositoryId", args.repositoryId)
+      .withIndex("by_category_and_repository", (q) =>
+        q.eq("categoryId", args.categoryId).eq("repositoryId", args.repositoryId)
       )
-      .filter((q) => q.eq(q.field("categoryId"), args.categoryId))
       .first();
 
     if (!repoCategory) {
       throw new ConvexError("Repository not in this category");
     }
+    assertUserOwns(repoCategory.userId, user._id, "Repository category");
 
     await ctx.db.delete(repoCategory._id);
 
     // Update category repository count
-    const category = await ctx.db.get(args.categoryId);
-    if (category) {
-      const remainingRepos = await ctx.db
-        .query("repositoryCategories")
-        .withIndex("by_category_id", (q) => q.eq("categoryId", args.categoryId))
-        .collect();
+    const remainingRepos = await ctx.db
+      .query("repositoryCategories")
+      .withIndex("by_user_and_category", (q) =>
+        q.eq("userId", user._id).eq("categoryId", args.categoryId)
+      )
+      .collect();
 
-      await ctx.db.patch(args.categoryId, {
-        metadata: {
-          ...category.metadata,
-          repositoryCount: remainingRepos.length,
-        },
-        updatedAt: Date.now(),
-      });
-    }
+    await ctx.db.patch(args.categoryId, {
+      metadata: {
+        ...category.metadata,
+        repositoryCount: remainingRepos.length,
+      },
+      updatedAt: Date.now(),
+    });
   },
 });
 
@@ -399,15 +422,13 @@ export const updateRepositoryMetadata = mutation({
     localTags: v.optional(v.array(v.string())),
   },
   handler: async (ctx, args) => {
-    const user = await getUserByClerkId(ctx, args.clerkUserId);
-    if (!user) {
-      throw new ConvexError("User not found");
-    }
+    const user = await requireAuthenticatedUser(ctx, args.clerkUserId);
 
     const repository = await ctx.db.get(args.repositoryId);
-    if (!repository || repository.userId !== user._id) {
+    if (!repository) {
       throw new ConvexError("Repository not found");
     }
+    assertUserOwns(repository.userId, user._id, "Repository");
 
     const updateData: any = {
       lastAccessedAt: Date.now(),
@@ -424,24 +445,7 @@ export const updateRepositoryMetadata = mutation({
 export const getRepositoryStats = query({
   args: { clerkUserId: v.string() },
   handler: async (ctx, { clerkUserId }) => {
-    const user = await ctx.db
-      .query("users")
-      .withIndex("by_clerk_user_id", (q) => q.eq("clerkUserId", clerkUserId))
-      .first();
-      
-    if (!user) {
-      // Return default stats instead of throwing error
-      // This allows the app to work gracefully while UserInitializer creates the user
-      return {
-        totalCount: 0,
-        totalStars: 0,
-        totalForks: 0,
-        averageStars: 0,
-        topLanguages: [],
-        topTopics: [],
-        lastSyncAt: undefined,
-      };
-    }
+    const user = await requireAuthenticatedUser(ctx, clerkUserId);
 
     const repositories = await ctx.db
       .query("repositories")
@@ -497,6 +501,11 @@ export const removeRepositoryByGitHubId = internalMutation({
     repo: v.string(),
   },
   handler: async (ctx, args) => {
+    const user = await ctx.db.get(args.userId);
+    if (!user) {
+      throw new ConvexError("User not found");
+    }
+
     const fullName = `${args.owner}/${args.repo}`;
     const repository = await ctx.db
       .query("repositories")
@@ -516,14 +525,7 @@ export const getLanguages = query({
     clerkUserId: v.string(),
   },
   handler: async (ctx, { clerkUserId }) => {
-    const user = await ctx.db
-      .query("users")
-      .withIndex("by_clerk_user_id", (q) => q.eq("clerkUserId", clerkUserId))
-      .first();
-
-    if (!user) {
-      return [];
-    }
+    const user = await requireAuthenticatedUser(ctx, clerkUserId);
 
     const repositories = await ctx.db
       .query("repositories")
@@ -556,14 +558,7 @@ export const getTopics = query({
     clerkUserId: v.string(),
   },
   handler: async (ctx, { clerkUserId }) => {
-    const user = await ctx.db
-      .query("users")
-      .withIndex("by_clerk_user_id", (q) => q.eq("clerkUserId", clerkUserId))
-      .first();
-
-    if (!user) {
-      return [];
-    }
+    const user = await requireAuthenticatedUser(ctx, clerkUserId);
 
     const repositories = await ctx.db
       .query("repositories")

@@ -1,14 +1,7 @@
-import { v } from "convex/values";
+import { ConvexError, v } from "convex/values";
 import { query, mutation, internalMutation } from "./_generated/server";
-import { Doc, Id } from "./_generated/dataModel";
-
-// Helper function to get user by Clerk ID
-const getUserByClerkId = async (ctx: any, clerkUserId: string) => {
-  return await ctx.db
-    .query("users")
-    .withIndex("by_clerk_user_id", (q: any) => q.eq("clerkUserId", clerkUserId))
-    .first();
-};
+import { Doc } from "./_generated/dataModel";
+import { assertUserOwns, requireAuthenticatedUser } from "./authz";
 
 // Helper: Build searchText from repository data
 export function buildSearchText(repo: {
@@ -60,14 +53,7 @@ export const searchRepositories = query({
     cursor: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    const user = await ctx.db
-      .query("users")
-      .withIndex("by_clerk_user_id", (q) => q.eq("clerkUserId", args.clerkUserId))
-      .first();
-
-    if (!user) {
-      return { results: [], nextCursor: null, totalCount: 0 };
-    }
+    const user = await requireAuthenticatedUser(ctx, args.clerkUserId);
 
     const searchQuery = args.query?.trim() || "";
     const filters = args.filters || {};
@@ -140,9 +126,17 @@ export const searchRepositories = query({
 
     // Filter by category if specified
     if (filters.categoryId) {
+      const category = await ctx.db.get(filters.categoryId);
+      if (!category) {
+        throw new ConvexError("Category not found");
+      }
+      assertUserOwns(category.userId, user._id, "Category");
+
       const repoCategories = await ctx.db
         .query("repositoryCategories")
-        .withIndex("by_category_id", (q) => q.eq("categoryId", filters.categoryId!))
+        .withIndex("by_user_and_category", (q) =>
+          q.eq("userId", user._id).eq("categoryId", filters.categoryId!)
+        )
         .collect();
 
       const repoIds = new Set(repoCategories.map((rc) => rc.repositoryId));
@@ -200,13 +194,15 @@ export const searchRepositories = query({
       paginatedResults.map(async (repo) => {
         const repoCategories = await ctx.db
           .query("repositoryCategories")
-          .withIndex("by_repository_id", (q) => q.eq("repositoryId", repo._id))
+          .withIndex("by_user_and_repository", (q) =>
+            q.eq("userId", user._id).eq("repositoryId", repo._id)
+          )
           .collect();
 
         const categories = await Promise.all(
           repoCategories.map(async (rc) => {
             const category = await ctx.db.get(rc.categoryId);
-            return category;
+            return category?.userId === user._id ? category : null;
           })
         );
 
@@ -235,8 +231,15 @@ export const recordSearch = mutation({
     resultCount: v.number(),
   },
   handler: async (ctx, args) => {
-    const user = await getUserByClerkId(ctx, args.clerkUserId);
-    if (!user) return;
+    const user = await requireAuthenticatedUser(ctx, args.clerkUserId);
+
+    if (args.filters?.categoryId) {
+      const category = await ctx.db.get(args.filters.categoryId);
+      if (!category) {
+        throw new ConvexError("Category not found");
+      }
+      assertUserOwns(category.userId, user._id, "Category");
+    }
 
     await ctx.db.insert("searchHistory", {
       userId: user._id,
@@ -256,14 +259,7 @@ export const getRecentSearches = query({
     limit: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
-    const user = await ctx.db
-      .query("users")
-      .withIndex("by_clerk_user_id", (q) => q.eq("clerkUserId", args.clerkUserId))
-      .first();
-
-    if (!user) {
-      return [];
-    }
+    const user = await requireAuthenticatedUser(ctx, args.clerkUserId);
 
     const limit = args.limit || 10;
 
@@ -295,6 +291,11 @@ export const updateRepositorySearchText = internalMutation({
     const repo = await ctx.db.get(repositoryId);
     if (!repo) return;
 
+    const owner = await ctx.db.get(repo.userId);
+    if (!owner) {
+      throw new ConvexError("Repository owner not found");
+    }
+
     const searchText = buildSearchText({
       name: repo.name,
       fullName: repo.fullName,
@@ -313,8 +314,7 @@ export const updateSearchTextForUser = mutation({
     clerkUserId: v.string(),
   },
   handler: async (ctx, { clerkUserId }) => {
-    const user = await getUserByClerkId(ctx, clerkUserId);
-    if (!user) return { updated: 0 };
+    const user = await requireAuthenticatedUser(ctx, clerkUserId);
 
     const repositories = await ctx.db
       .query("repositories")
@@ -352,6 +352,11 @@ export const batchUpdateSearchText = internalMutation({
     for (const repoId of repositoryIds) {
       const repo = await ctx.db.get(repoId);
       if (!repo) continue;
+
+      const owner = await ctx.db.get(repo.userId);
+      if (!owner) {
+        throw new ConvexError("Repository owner not found");
+      }
 
       const searchText = buildSearchText({
         name: repo.name,

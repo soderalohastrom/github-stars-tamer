@@ -1,5 +1,10 @@
 import { ConvexError, v } from "convex/values";
 import { internalMutation, internalQuery, mutation, query } from "./_generated/server";
+import {
+  getUserByAuthenticatedSubject,
+  requireAuthenticatedSubject,
+  requireAuthenticatedUser,
+} from "./authz";
 
 // Get user by Clerk ID
 export const getUserByClerkId = internalQuery({
@@ -10,6 +15,25 @@ export const getUserByClerkId = internalQuery({
       .withIndex("by_clerk_user_id", (q) => q.eq("clerkUserId", clerkUserId))
       .first();
   },
+});
+
+/**
+ * The only profile shape returned to a client. In particular, this excludes
+ * every OAuth/PAT field and provider account identifier.
+ */
+const toSafeUserProfile = (user: NonNullable<Awaited<ReturnType<typeof getUserByClerkIdHelper>>>) => ({
+  _id: user._id,
+  _creationTime: user._creationTime,
+  clerkUserId: user.clerkUserId,
+  email: user.email,
+  ...(user.firstName !== undefined ? { firstName: user.firstName } : {}),
+  ...(user.lastName !== undefined ? { lastName: user.lastName } : {}),
+  ...(user.imageUrl !== undefined ? { imageUrl: user.imageUrl } : {}),
+  ...(user.githubUsername !== undefined ? { githubUsername: user.githubUsername } : {}),
+  ...(user.preferences !== undefined ? { preferences: user.preferences } : {}),
+  ...(user.lastSyncAt !== undefined ? { lastSyncAt: user.lastSyncAt } : {}),
+  createdAt: user.createdAt,
+  updatedAt: user.updatedAt,
 });
 
 // Internal helper function to get user by clerk ID (for use within mutations)
@@ -37,10 +61,8 @@ export const upsertUserFromClerk = mutation({
     })),
   },
   handler: async (ctx, args) => {
-    const existingUser = await ctx.db
-      .query("users")
-      .withIndex("by_clerk_user_id", (q) => q.eq("clerkUserId", args.clerkUserId))
-      .first();
+    const subject = await requireAuthenticatedSubject(ctx, args.clerkUserId);
+    const existingUser = await getUserByAuthenticatedSubject(ctx, subject);
 
     const now = Date.now();
 
@@ -71,7 +93,7 @@ export const upsertUserFromClerk = mutation({
     } else {
       // Create new user with default preferences
       const userId = await ctx.db.insert("users", {
-        clerkUserId: args.clerkUserId,
+        clerkUserId: subject,
         email: args.email,
         firstName: args.firstName,
         lastName: args.lastName,
@@ -147,17 +169,15 @@ const createDefaultCategories = async (ctx: any, userId: any) => {
 export const getUserProfile = query({
   args: { clerkUserId: v.string() },
   handler: async (ctx, { clerkUserId }) => {
-    const user = await ctx.db
-      .query("users")
-      .withIndex("by_clerk_user_id", (q) => q.eq("clerkUserId", clerkUserId))
-      .first();
+    const subject = await requireAuthenticatedSubject(ctx, clerkUserId);
+    const user = await getUserByAuthenticatedSubject(ctx, subject);
       
     if (!user) {
       // Return null instead of throwing error
       // This allows the app to work gracefully while UserInitializer creates the user
       return null;
     }
-    return user;
+    return toSafeUserProfile(user);
   },
 });
 
@@ -182,14 +202,19 @@ export const updateUserPreferences = mutation({
     }),
   },
   handler: async (ctx, { clerkUserId, preferences }) => {
-    const user = await getUserByClerkIdHelper(ctx, clerkUserId);
-    if (!user) {
-      throw new ConvexError("User not found");
-    }
+    const user = await requireAuthenticatedUser(ctx, clerkUserId);
 
+    const currentPreferences = user.preferences ?? {
+      theme: "system" as const,
+      defaultSort: "created" as const,
+      enableHaptics: true,
+      syncFrequency: "manual" as const,
+    };
     const updatedPreferences = {
-      ...user.preferences,
-      ...preferences,
+      theme: preferences.theme ?? currentPreferences.theme,
+      defaultSort: preferences.defaultSort ?? currentPreferences.defaultSort,
+      enableHaptics: preferences.enableHaptics ?? currentPreferences.enableHaptics,
+      syncFrequency: preferences.syncFrequency ?? currentPreferences.syncFrequency,
     };
 
     await ctx.db.patch(user._id, {
@@ -199,49 +224,19 @@ export const updateUserPreferences = mutation({
   },
 });
 
-// Store encrypted GitHub token
+// Legacy personal-access-token storage is intentionally disabled. OAuth tokens
+// are fetched server-side from Clerk and must never be accepted from a client.
 export const storeGitHubToken = mutation({
   args: {
     clerkUserId: v.string(),
     encryptedToken: v.string(),
     githubUsername: v.string(),
   },
-  handler: async (ctx, { clerkUserId, encryptedToken, githubUsername }) => {
-    let user = await getUserByClerkIdHelper(ctx, clerkUserId);
-    
-    // If user doesn't exist, try to get minimal info from Clerk and create the user
-    if (!user) {
-      // For now, create a minimal user record - the UserInitializer will update it later
-      const now = Date.now();
-      const userId = await ctx.db.insert("users", {
-        clerkUserId: clerkUserId,
-        email: "unknown@example.com", // Temporary placeholder
-        preferences: {
-          theme: "system",
-          defaultSort: "created",
-          enableHaptics: true,
-          syncFrequency: "manual",
-        },
-        createdAt: now,
-        updatedAt: now,
-      });
-      
-      // Create default categories for new user
-      await createDefaultCategories(ctx, userId);
-      
-      // Fetch the newly created user
-      user = await getUserByClerkIdHelper(ctx, clerkUserId);
-      
-      if (!user) {
-        throw new ConvexError("Failed to create user record");
-      }
-    }
-
-    await ctx.db.patch(user._id, {
-      githubToken: encryptedToken,
-      githubUsername,
-      updatedAt: Date.now(),
-    });
+  handler: async (ctx, { clerkUserId }) => {
+    await requireAuthenticatedSubject(ctx, clerkUserId);
+    throw new ConvexError(
+      "Legacy GitHub token storage is disabled; reconnect GitHub through Clerk OAuth",
+    );
   },
 });
 
@@ -252,6 +247,10 @@ export const updateLastSyncTime = internalMutation({
     syncTime: v.number(),
   },
   handler: async (ctx, { userId, syncTime }) => {
+    const user = await ctx.db.get(userId);
+    if (!user) {
+      throw new ConvexError("User not found");
+    }
     await ctx.db.patch(userId, {
       lastSyncAt: syncTime,
       updatedAt: Date.now(),
@@ -263,10 +262,8 @@ export const updateLastSyncTime = internalMutation({
 export const isGitHubConnected = query({
   args: { clerkUserId: v.string() },
   handler: async (ctx, { clerkUserId }) => {
-    const user = await ctx.db
-      .query("users")
-      .withIndex("by_clerk_user_id", (q) => q.eq("clerkUserId", clerkUserId))
-      .first();
+    const subject = await requireAuthenticatedSubject(ctx, clerkUserId);
+    const user = await getUserByAuthenticatedSubject(ctx, subject);
 
     if (!user) {
       return {

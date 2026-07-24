@@ -1,13 +1,6 @@
 import { ConvexError, v } from "convex/values";
 import { query, mutation } from "./_generated/server";
-
-// Helper function to get user by Clerk ID
-const getUserByClerkId = async (ctx: any, clerkUserId: string) => {
-  return await ctx.db
-    .query("users")
-    .withIndex("by_clerk_user_id", (q: any) => q.eq("clerkUserId", clerkUserId))
-    .first();
-};
+import { assertUserOwns, requireAuthenticatedUser } from "./authz";
 
 // Filter and sort schema (shared with search.ts)
 const filterSchema = v.object({
@@ -43,9 +36,14 @@ export const create = mutation({
     icon: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    const user = await getUserByClerkId(ctx, args.clerkUserId);
-    if (!user) {
-      throw new ConvexError("User not found");
+    const user = await requireAuthenticatedUser(ctx, args.clerkUserId);
+
+    if (args.filters.categoryId) {
+      const category = await ctx.db.get(args.filters.categoryId);
+      if (!category) {
+        throw new ConvexError("Category not found");
+      }
+      assertUserOwns(category.userId, user._id, "Category");
     }
 
     const now = Date.now();
@@ -75,14 +73,7 @@ export const list = query({
     clerkUserId: v.string(),
   },
   handler: async (ctx, args) => {
-    const user = await ctx.db
-      .query("users")
-      .withIndex("by_clerk_user_id", (q) => q.eq("clerkUserId", args.clerkUserId))
-      .first();
-
-    if (!user) {
-      return [];
-    }
+    const user = await requireAuthenticatedUser(ctx, args.clerkUserId);
 
     const filters = await ctx.db
       .query("savedFilters")
@@ -104,7 +95,7 @@ export const list = query({
         let categoryName: string | undefined;
         if (filter.filters.categoryId) {
           const category = await ctx.db.get(filter.filters.categoryId);
-          categoryName = category?.name;
+          categoryName = category?.userId === user._id ? category.name : undefined;
         }
         return {
           ...filter,
@@ -124,26 +115,20 @@ export const get = query({
     filterId: v.id("savedFilters"),
   },
   handler: async (ctx, args) => {
-    const user = await ctx.db
-      .query("users")
-      .withIndex("by_clerk_user_id", (q) => q.eq("clerkUserId", args.clerkUserId))
-      .first();
-
-    if (!user) {
-      return null;
-    }
+    const user = await requireAuthenticatedUser(ctx, args.clerkUserId);
 
     const filter = await ctx.db.get(args.filterId);
 
-    if (!filter || filter.userId !== user._id) {
+    if (!filter) {
       return null;
     }
+    if (filter.userId !== user._id) return null;
 
     // Enrich with category name
     let categoryName: string | undefined;
     if (filter.filters.categoryId) {
       const category = await ctx.db.get(filter.filters.categoryId);
-      categoryName = category?.name;
+      categoryName = category?.userId === user._id ? category.name : undefined;
     }
 
     return {
@@ -167,14 +152,20 @@ export const update = mutation({
     icon: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    const user = await getUserByClerkId(ctx, args.clerkUserId);
-    if (!user) {
-      throw new ConvexError("User not found");
-    }
+    const user = await requireAuthenticatedUser(ctx, args.clerkUserId);
 
     const filter = await ctx.db.get(args.filterId);
-    if (!filter || filter.userId !== user._id) {
+    if (!filter) {
       throw new ConvexError("Saved filter not found");
+    }
+    assertUserOwns(filter.userId, user._id, "Saved filter");
+
+    if (args.filters?.categoryId) {
+      const category = await ctx.db.get(args.filters.categoryId);
+      if (!category) {
+        throw new ConvexError("Category not found");
+      }
+      assertUserOwns(category.userId, user._id, "Category");
     }
 
     const updates: Record<string, any> = {
@@ -200,15 +191,13 @@ export const remove = mutation({
     filterId: v.id("savedFilters"),
   },
   handler: async (ctx, args) => {
-    const user = await getUserByClerkId(ctx, args.clerkUserId);
-    if (!user) {
-      throw new ConvexError("User not found");
-    }
+    const user = await requireAuthenticatedUser(ctx, args.clerkUserId);
 
     const filter = await ctx.db.get(args.filterId);
-    if (!filter || filter.userId !== user._id) {
+    if (!filter) {
       throw new ConvexError("Saved filter not found");
     }
+    assertUserOwns(filter.userId, user._id, "Saved filter");
 
     await ctx.db.delete(args.filterId);
   },
@@ -221,15 +210,13 @@ export const togglePin = mutation({
     filterId: v.id("savedFilters"),
   },
   handler: async (ctx, args) => {
-    const user = await getUserByClerkId(ctx, args.clerkUserId);
-    if (!user) {
-      throw new ConvexError("User not found");
-    }
+    const user = await requireAuthenticatedUser(ctx, args.clerkUserId);
 
     const filter = await ctx.db.get(args.filterId);
-    if (!filter || filter.userId !== user._id) {
+    if (!filter) {
       throw new ConvexError("Saved filter not found");
     }
+    assertUserOwns(filter.userId, user._id, "Saved filter");
 
     await ctx.db.patch(args.filterId, {
       isPinned: !filter.isPinned,
@@ -247,15 +234,13 @@ export const recordUsage = mutation({
     filterId: v.id("savedFilters"),
   },
   handler: async (ctx, args) => {
-    const user = await getUserByClerkId(ctx, args.clerkUserId);
-    if (!user) {
-      throw new ConvexError("User not found");
-    }
+    const user = await requireAuthenticatedUser(ctx, args.clerkUserId);
 
     const filter = await ctx.db.get(args.filterId);
-    if (!filter || filter.userId !== user._id) {
+    if (!filter) {
       return; // Silently ignore if not found
     }
+    assertUserOwns(filter.userId, user._id, "Saved filter");
 
     await ctx.db.patch(args.filterId, {
       lastUsedAt: Date.now(),

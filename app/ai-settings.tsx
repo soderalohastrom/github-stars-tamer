@@ -22,6 +22,12 @@ import { router } from 'expo-router';
 // Provider and model options
 const PROVIDERS = [
   {
+    id: 'cloudflare',
+    name: 'Cloudflare Workers AI',
+    description: 'Free edge categorization · no API key required',
+    icon: 'cloud',
+  },
+  {
     id: 'claude',
     name: 'Claude',
     description: 'Recommended - Best quality categorization',
@@ -67,9 +73,12 @@ const MODEL_OPTIONS: Record<string, Array<{ id: string; name: string; descriptio
     { id: 'llama2:7b', name: 'Llama 2 7B', description: 'Balanced performance' },
     { id: 'mistral:7b', name: 'Mistral 7B', description: 'Good quality' },
   ],
+  cloudflare: [
+    { id: '@cf/meta/llama-3.1-8b-instruct-fast', name: 'Llama 3.1 8B Fast', description: 'Free edge inference with fair-use limits' },
+  ],
 };
 
-type Provider = 'claude' | 'openai' | 'ollama' | 'cerebras';
+type Provider = 'cloudflare' | 'claude' | 'openai' | 'ollama' | 'cerebras';
 
 const AISettingsScreen = () => {
   const { user } = useUser();
@@ -82,8 +91,8 @@ const AISettingsScreen = () => {
   // Local state for settings
   const [localSettings, setLocalSettings] = useState({
     enableAI: false,
-    aiProvider: 'claude' as Provider,
-    aiModel: 'claude-haiku-4-5',
+    aiProvider: 'cloudflare' as Provider,
+    aiModel: '@cf/meta/llama-3.1-8b-instruct-fast',
     ollamaEndpoint: 'http://localhost:11434',
     includeReadme: true,
     timeoutMs: 30000,
@@ -106,6 +115,7 @@ const AISettingsScreen = () => {
 
   // Mutations and actions
   const updateAiSettings = useMutation(api.ai.updateAiSettings);
+  const testCloudflareConnection = useAction((api as any).cloudflareAi.testCloudflareConnection);
   const testClaudeConnection = useAction(api.claudeAi.testClaudeConnection);
   const testOpenAIConnection = useAction(api.openaiAi.testOpenAIConnection);
   const testOllamaConnection = useAction(api.ai.testOllamaConnectionAction);
@@ -117,8 +127,8 @@ const AISettingsScreen = () => {
       const settings = aiSettings as any;
       setLocalSettings({
         enableAI: settings.enableAI ?? false,
-        aiProvider: (settings.aiProvider as Provider) ?? 'claude',
-        aiModel: settings.aiModel ?? 'claude-3-haiku-20240307',
+        aiProvider: (settings.aiProvider as Provider) ?? 'cloudflare',
+        aiModel: settings.aiModel ?? '@cf/meta/llama-3.1-8b-instruct-fast',
         ollamaEndpoint: settings.ollamaEndpoint ?? 'http://localhost:11434',
         includeReadme: settings.includeReadme ?? true,
         timeoutMs: settings.advancedSettings?.timeoutMs ?? 30000,
@@ -183,7 +193,9 @@ const AISettingsScreen = () => {
     try {
       let result;
 
-      if (localSettings.aiProvider === 'claude') {
+      if (localSettings.aiProvider === 'cloudflare') {
+        result = await testCloudflareConnection({ model: localSettings.aiModel });
+      } else if (localSettings.aiProvider === 'claude') {
         result = await testClaudeConnection({
           model: localSettings.aiModel,
         });
@@ -235,8 +247,8 @@ const AISettingsScreen = () => {
           onPress: () => {
             setLocalSettings({
               enableAI: false,
-              aiProvider: 'claude',
-              aiModel: 'claude-haiku-4-5',
+              aiProvider: 'cloudflare',
+              aiModel: '@cf/meta/llama-3.1-8b-instruct-fast',
               ollamaEndpoint: 'http://localhost:11434',
               includeReadme: true,
               timeoutMs: 30000,
@@ -646,6 +658,15 @@ const AISettingsScreen = () => {
               <Text style={styles.infoText}>
                 Claude is powered by Anthropic and requires an API key. Set ANTHROPIC_API_KEY in
                 your Convex environment variables.
+              </Text>
+            </View>
+          )}
+
+          {localSettings.aiProvider === 'cloudflare' && (
+            <View style={styles.infoBox}>
+              <Feather name="info" size={16} color={isDark ? '#93C5FD' : '#3B82F6'} />
+              <Text style={styles.infoText}>
+                Cloudflare Workers AI is the free default. It uses a shared daily allocation and sends only repository metadata (plus an optional short README excerpt).
               </Text>
             </View>
           )}

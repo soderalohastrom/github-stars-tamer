@@ -4,7 +4,7 @@ import { createTestConvex } from "./setup.test-helper";
 
 // Helper to create a user and return the clerkUserId
 async function setupUser(t: any, clerkUserId = "clerk_123") {
-  await t.mutation(api.users.upsertUserFromClerk, {
+  await t.withIdentity({ subject: clerkUserId }).mutation(api.users.upsertUserFromClerk, {
     clerkUserId,
     email: `${clerkUserId}@example.com`,
   });
@@ -17,7 +17,7 @@ describe("categories", () => {
       const t = createTestConvex();
       const clerkUserId = await setupUser(t);
 
-      const categoryId = await t.mutation(api.categories.createCategory, {
+      const categoryId = await t.withIdentity({ subject: clerkUserId }).mutation(api.categories.createCategory, {
         clerkUserId,
         name: "Custom Category",
         color: "#ff0000",
@@ -26,7 +26,7 @@ describe("categories", () => {
 
       expect(categoryId).toBeDefined();
 
-      const categories = await t.query(api.categories.getUserCategories, {
+      const categories = await t.withIdentity({ subject: clerkUserId }).query(api.categories.getUserCategories, {
         clerkUserId,
       });
       // 4 defaults + 1 custom
@@ -40,13 +40,13 @@ describe("categories", () => {
       const t = createTestConvex();
       const clerkUserId = await setupUser(t);
 
-      const parentId = await t.mutation(api.categories.createCategory, {
+      const parentId = await t.withIdentity({ subject: clerkUserId }).mutation(api.categories.createCategory, {
         clerkUserId,
         name: "Parent",
         color: "#00ff00",
       });
 
-      const childId = await t.mutation(api.categories.createCategory, {
+      const childId = await t.withIdentity({ subject: clerkUserId }).mutation(api.categories.createCategory, {
         clerkUserId,
         name: "Child",
         color: "#0000ff",
@@ -56,7 +56,7 @@ describe("categories", () => {
       expect(childId).toBeDefined();
 
       // Verify hierarchy
-      const categories = await t.query(api.categories.getUserCategories, {
+      const categories = await t.withIdentity({ subject: clerkUserId }).query(api.categories.getUserCategories, {
         clerkUserId,
       });
       const parent = categories.find((c: any) => c.name === "Parent");
@@ -71,14 +71,14 @@ describe("categories", () => {
 
       // Create a category with user2 to test cross-user rejection
       const clerkUserId2 = await setupUser(t, "clerk_456");
-      const otherCategoryId = await t.mutation(api.categories.createCategory, {
+      const otherCategoryId = await t.withIdentity({ subject: clerkUserId2 }).mutation(api.categories.createCategory, {
         clerkUserId: clerkUserId2,
         name: "Other User Cat",
         color: "#999999",
       });
 
       await expect(
-        t.mutation(api.categories.createCategory, {
+        t.withIdentity({ subject: clerkUserId }).mutation(api.categories.createCategory, {
           clerkUserId,
           name: "Bad Child",
           color: "#000000",
@@ -89,12 +89,13 @@ describe("categories", () => {
   });
 
   describe("getUserCategories", () => {
-    test("returns empty array for non-existent user", async () => {
+    test("rejects a non-existent authenticated user", async () => {
       const t = createTestConvex();
-      const categories = await t.query(api.categories.getUserCategories, {
-        clerkUserId: "nonexistent",
-      });
-      expect(categories).toEqual([]);
+      await expect(
+        t.withIdentity({ subject: "nonexistent" }).query(api.categories.getUserCategories, {
+          clerkUserId: "nonexistent",
+        })
+      ).rejects.toThrow("User not found");
     });
 
     test("returns hierarchical tree structure", async () => {
@@ -102,25 +103,25 @@ describe("categories", () => {
       const clerkUserId = await setupUser(t);
 
       // Create a parent with two children
-      const parentId = await t.mutation(api.categories.createCategory, {
+      const parentId = await t.withIdentity({ subject: clerkUserId }).mutation(api.categories.createCategory, {
         clerkUserId,
         name: "Root",
         color: "#111111",
       });
-      await t.mutation(api.categories.createCategory, {
+      await t.withIdentity({ subject: clerkUserId }).mutation(api.categories.createCategory, {
         clerkUserId,
         name: "Child A",
         color: "#222222",
         parentCategoryId: parentId,
       });
-      await t.mutation(api.categories.createCategory, {
+      await t.withIdentity({ subject: clerkUserId }).mutation(api.categories.createCategory, {
         clerkUserId,
         name: "Child B",
         color: "#333333",
         parentCategoryId: parentId,
       });
 
-      const categories = await t.query(api.categories.getUserCategories, {
+      const categories = await t.withIdentity({ subject: clerkUserId }).query(api.categories.getUserCategories, {
         clerkUserId,
       });
       const root = categories.find((c: any) => c.name === "Root");
@@ -136,20 +137,20 @@ describe("categories", () => {
       const t = createTestConvex();
       const clerkUserId = await setupUser(t);
 
-      const catId = await t.mutation(api.categories.createCategory, {
+      const catId = await t.withIdentity({ subject: clerkUserId }).mutation(api.categories.createCategory, {
         clerkUserId,
         name: "Original",
         color: "#aaaaaa",
       });
 
-      await t.mutation(api.categories.updateCategory, {
+      await t.withIdentity({ subject: clerkUserId }).mutation(api.categories.updateCategory, {
         clerkUserId,
         categoryId: catId,
         name: "Renamed",
         color: "#bbbbbb",
       });
 
-      const stats = await t.query(api.categories.getCategoryWithStats, {
+      const stats = await t.withIdentity({ subject: clerkUserId }).query(api.categories.getCategoryWithStats, {
         clerkUserId,
         categoryId: catId,
       });
@@ -161,14 +162,14 @@ describe("categories", () => {
       const t = createTestConvex();
       const clerkUserId = await setupUser(t);
 
-      const catId = await t.mutation(api.categories.createCategory, {
+      const catId = await t.withIdentity({ subject: clerkUserId }).mutation(api.categories.createCategory, {
         clerkUserId,
         name: "Self",
         color: "#cccccc",
       });
 
       await expect(
-        t.mutation(api.categories.updateCategory, {
+        t.withIdentity({ subject: clerkUserId }).mutation(api.categories.updateCategory, {
           clerkUserId,
           categoryId: catId,
           parentCategoryId: catId,
@@ -182,18 +183,18 @@ describe("categories", () => {
       const t = createTestConvex();
       const clerkUserId = await setupUser(t);
 
-      const catId = await t.mutation(api.categories.createCategory, {
+      const catId = await t.withIdentity({ subject: clerkUserId }).mutation(api.categories.createCategory, {
         clerkUserId,
         name: "ToDelete",
         color: "#dddddd",
       });
 
-      await t.mutation(api.categories.deleteCategory, {
+      await t.withIdentity({ subject: clerkUserId }).mutation(api.categories.deleteCategory, {
         clerkUserId,
         categoryId: catId,
       });
 
-      const categories = await t.query(api.categories.getUserCategories, {
+      const categories = await t.withIdentity({ subject: clerkUserId }).query(api.categories.getUserCategories, {
         clerkUserId,
       });
       const deleted = categories.find((c: any) => c.name === "ToDelete");
@@ -204,20 +205,20 @@ describe("categories", () => {
       const t = createTestConvex();
       const clerkUserId = await setupUser(t);
 
-      const grandparentId = await t.mutation(api.categories.createCategory, {
+      const grandparentId = await t.withIdentity({ subject: clerkUserId }).mutation(api.categories.createCategory, {
         clerkUserId,
         name: "Grandparent",
         color: "#111111",
       });
 
-      const parentId = await t.mutation(api.categories.createCategory, {
+      const parentId = await t.withIdentity({ subject: clerkUserId }).mutation(api.categories.createCategory, {
         clerkUserId,
         name: "Parent",
         color: "#222222",
         parentCategoryId: grandparentId,
       });
 
-      await t.mutation(api.categories.createCategory, {
+      await t.withIdentity({ subject: clerkUserId }).mutation(api.categories.createCategory, {
         clerkUserId,
         name: "Child",
         color: "#333333",
@@ -225,12 +226,12 @@ describe("categories", () => {
       });
 
       // Delete parent — child should move to grandparent
-      await t.mutation(api.categories.deleteCategory, {
+      await t.withIdentity({ subject: clerkUserId }).mutation(api.categories.deleteCategory, {
         clerkUserId,
         categoryId: parentId,
       });
 
-      const categories = await t.query(api.categories.getUserCategories, {
+      const categories = await t.withIdentity({ subject: clerkUserId }).query(api.categories.getUserCategories, {
         clerkUserId,
       });
       const grandparent = categories.find((c: any) => c.name === "Grandparent");
@@ -245,18 +246,18 @@ describe("categories", () => {
       const t = createTestConvex();
       const clerkUserId = await setupUser(t);
 
-      const cat1 = await t.mutation(api.categories.createCategory, {
+      const cat1 = await t.withIdentity({ subject: clerkUserId }).mutation(api.categories.createCategory, {
         clerkUserId,
         name: "Cat1",
         color: "#111111",
       });
-      const cat2 = await t.mutation(api.categories.createCategory, {
+      const cat2 = await t.withIdentity({ subject: clerkUserId }).mutation(api.categories.createCategory, {
         clerkUserId,
         name: "Cat2",
         color: "#222222",
       });
 
-      await t.mutation(api.categories.reorderCategories, {
+      await t.withIdentity({ subject: clerkUserId }).mutation(api.categories.reorderCategories, {
         clerkUserId,
         categoryUpdates: [
           { categoryId: cat1, sortOrder: 10 },
@@ -265,11 +266,11 @@ describe("categories", () => {
       });
 
       // Verify by checking stats
-      const stats1 = await t.query(api.categories.getCategoryWithStats, {
+      const stats1 = await t.withIdentity({ subject: clerkUserId }).query(api.categories.getCategoryWithStats, {
         clerkUserId,
         categoryId: cat1,
       });
-      const stats2 = await t.query(api.categories.getCategoryWithStats, {
+      const stats2 = await t.withIdentity({ subject: clerkUserId }).query(api.categories.getCategoryWithStats, {
         clerkUserId,
         categoryId: cat2,
       });
@@ -283,19 +284,19 @@ describe("categories", () => {
       const t = createTestConvex();
       const clerkUserId = await setupUser(t);
 
-      const parentId = await t.mutation(api.categories.createCategory, {
+      const parentId = await t.withIdentity({ subject: clerkUserId }).mutation(api.categories.createCategory, {
         clerkUserId,
         name: "WithStats",
         color: "#444444",
       });
-      await t.mutation(api.categories.createCategory, {
+      await t.withIdentity({ subject: clerkUserId }).mutation(api.categories.createCategory, {
         clerkUserId,
         name: "ChildOfStats",
         color: "#555555",
         parentCategoryId: parentId,
       });
 
-      const stats = await t.query(api.categories.getCategoryWithStats, {
+      const stats = await t.withIdentity({ subject: clerkUserId }).query(api.categories.getCategoryWithStats, {
         clerkUserId,
         categoryId: parentId,
       });

@@ -1,7 +1,8 @@
 import { ConvexError, v } from "convex/values";
-import { action, internalQuery } from "./_generated/server";
+import { action, internalAction } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
+import { requireAuthenticatedActionUser } from "./authz";
 
 // OpenAI API configuration
 const OPENAI_API_BASE = "https://api.openai.com/v1/chat/completions";
@@ -78,6 +79,27 @@ export const categorizeRepositories = action({
     includeReadme: v.optional(v.boolean()),
     batchId: v.optional(v.string()),
   },
+  handler: async (ctx, args): Promise<any> => {
+    const user = await requireAuthenticatedActionUser(ctx, args.clerkUserId);
+    return await ctx.runAction((internal as any).openaiAi.categorizeRepositoriesInternal, {
+      userId: user._id,
+      repositoryIds: args.repositoryIds,
+      model: args.model,
+      includeReadme: args.includeReadme,
+      batchId: args.batchId,
+    });
+  },
+});
+
+// Internal worker for interactive and scheduled OpenAI categorization.
+export const categorizeRepositoriesInternal = internalAction({
+  args: {
+    userId: v.id("users"),
+    repositoryIds: v.array(v.id("repositories")),
+    model: v.optional(v.string()),
+    includeReadme: v.optional(v.boolean()),
+    batchId: v.optional(v.string()),
+  },
   handler: async (ctx, args) => {
     const startTime = Date.now();
     const model = args.model || DEFAULT_MODEL;
@@ -89,18 +111,14 @@ export const categorizeRepositories = action({
       throw new ConvexError("OPENAI_API_KEY not configured in Convex environment variables.");
     }
 
-    const user = await ctx.runQuery(internal.users.getUserByClerkId, {
-      clerkUserId: args.clerkUserId,
-    });
-    if (!user) throw new ConvexError("User not found");
-
     // Fetch repositories
     const repositories: any[] = [];
     for (const repoId of args.repositoryIds) {
       const repo = await ctx.runQuery(internal.claudeAi.getRepositoryById, {
         repositoryId: repoId,
+        userId: args.userId,
       });
-      if (repo && repo.userId === user._id) {
+      if (repo) {
         repositories.push({
           id: repoId,
           name: repo.name,
@@ -121,7 +139,7 @@ export const categorizeRepositories = action({
     // Get existing categories
     const categories = await ctx.runQuery(
       internal.claudeAi.getUserCategoryNames,
-      { userId: user._id }
+      { userId: args.userId }
     );
 
     const prompt = buildPrompt(repositories, categories, includeReadme);
@@ -173,7 +191,7 @@ export const categorizeRepositories = action({
 
     // Track usage
     await ctx.runMutation(internal.claudeAi.recordAiUsage, {
-      userId: user._id,
+      userId: args.userId,
       provider: "openai",
       model,
       inputTokens,
@@ -197,7 +215,7 @@ export const categorizeRepositories = action({
       const suggestionId = await ctx.runMutation(
         internal.claudeAi.createSuggestion,
         {
-          userId: user._id,
+          userId: args.userId,
           repositoryId: matchingRepo.id as Id<"repositories">,
           suggestedCategoryName: suggestion.category || "Uncategorized",
           suggestedCategoryColor: suggestion.suggestedColor,
@@ -239,17 +257,13 @@ export const generateCategoryTaxonomy = action({
     categoryCount: v.optional(v.number()),
     model: v.optional(v.string()),
   },
-  handler: async (ctx, args) => {
+  handler: async (ctx, args): Promise<any> => {
+    const user = await requireAuthenticatedActionUser(ctx, args.clerkUserId);
     const model = args.model || DEFAULT_MODEL;
     const targetCount = args.categoryCount || 15;
 
     const apiKey = process.env.OPENAI_API_KEY;
     if (!apiKey) throw new ConvexError("OPENAI_API_KEY not configured");
-
-    const user = await ctx.runQuery(internal.users.getUserByClerkId, {
-      clerkUserId: args.clerkUserId,
-    });
-    if (!user) throw new ConvexError("User not found");
 
     const allRepos = await ctx.runQuery(internal.claudeAi.sampleRepositories, {
       userId: user._id,
@@ -347,6 +361,7 @@ Respond ONLY with valid JSON:
 export const testOpenAIConnection = action({
   args: { model: v.optional(v.string()) },
   handler: async (ctx, args) => {
+    await requireAuthenticatedActionUser(ctx);
     const model = args.model || DEFAULT_MODEL;
     const apiKey = process.env.OPENAI_API_KEY;
 

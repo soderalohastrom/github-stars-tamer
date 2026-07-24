@@ -14,6 +14,7 @@ import { useUser, useClerk, useOAuth } from '@clerk/clerk-expo';
 import { useQuery, useMutation, useAction } from 'convex/react';
 import { api } from '../../convex/_generated/api';
 import * as WebBrowser from 'expo-web-browser';
+import * as ExpoLinking from 'expo-linking';
 
 // Required for OAuth redirect handling in Expo
 WebBrowser.maybeCompleteAuthSession();
@@ -99,7 +100,7 @@ const GitHubOAuthCard: React.FC<GitHubOAuthCardProps> = ({ onConnectionChange })
     try {
       // Start Clerk OAuth flow for GitHub
       const result = await startOAuthFlow({
-        redirectUrl: 'exp://localhost:8081/--/oauth-callback',
+        redirectUrl: ExpoLinking.createURL('/oauth-callback', { scheme: 'star-shelf' }),
       });
 
       if (result.createdSessionId) {

@@ -1,12 +1,27 @@
 import { ConvexError, v } from "convex/values";
-import { action, internalAction, internalMutation, internalQuery } from "./_generated/server";
+import { action } from "./_generated/server";
 import { internal } from "./_generated/api";
-import { getUserByClerkIdHelper as getUserByClerkId } from "./users";
+import { requireAuthenticatedActionUser } from "./authz";
 
 // GitHub API configuration
 const GITHUB_API_BASE = "https://api.github.com";
 const GITHUB_API_VERSION = "2022-11-28";
 const RATE_LIMIT_THRESHOLD = 100;
+
+type GitHubRateLimitStatus = {
+  core: {
+    limit: number;
+    remaining: number;
+    reset: number;
+    used: number;
+  };
+  search: {
+    limit: number;
+    remaining: number;
+    reset: number;
+    used: number;
+  };
+};
 
 /**
  * Helper to make GitHub API request with token refresh on 401.
@@ -59,43 +74,31 @@ async function fetchGitHubWithRetry(
   return { response, token };
 }
 
-// Sync user's starred repositories from GitHub
-// Now fetches token from database via OAuth instead of requiring it as parameter
+// Sync the authenticated user's starred repositories from GitHub.
 export const syncStarredRepositories = action({
   args: {
     clerkUserId: v.string(),
-    // githubToken is now optional for backward compatibility but deprecated
+    // Retained for backward compatibility; public tokens are ignored.
     githubToken: v.optional(v.string()),
     fullSync: v.optional(v.boolean()), // Full sync vs incremental
   },
-  handler: async (ctx, { clerkUserId, githubToken: providedToken, fullSync = false }) => {
-    console.log(`Starting sync for user ${clerkUserId}, fullSync: ${fullSync}`);
+  handler: async (ctx, { clerkUserId, fullSync = false }) => {
+    const user = await requireAuthenticatedActionUser(ctx, clerkUserId);
+    const subject = user.clerkUserId;
+    console.log(`Starting sync for authenticated user ${subject}, fullSync: ${fullSync}`);
 
-    const user = await ctx.runQuery(internal.users.getUserByClerkId, { clerkUserId });
-    if (!user) {
-      throw new ConvexError("User not found");
+    // The legacy githubToken argument is deliberately ignored. GitHub OAuth
+    // credentials are retrieved only from the authenticated user's server-side
+    // record, never from a public action argument.
+    const tokenResult = await ctx.runAction(internal.github.getValidGithubTokenInternal, {
+      clerkUserId: subject,
+    });
+
+    if (!tokenResult.token) {
+      throw new ConvexError(tokenResult.error || "No GitHub token available. Please connect your GitHub account.");
     }
 
-    // Get GitHub token - prefer OAuth token from database, fall back to provided token
-    let githubToken: string;
-
-    if (providedToken) {
-      // Legacy path: use provided token (backward compatibility)
-      console.log("Using provided GitHub token (legacy mode)");
-      githubToken = providedToken;
-    } else {
-      // OAuth path: get token from database, refreshing if needed
-      console.log("Fetching GitHub OAuth token from database...");
-      const tokenResult = await ctx.runAction(internal.github.getValidGithubTokenInternal, {
-        clerkUserId,
-      });
-
-      if (!tokenResult.token) {
-        throw new ConvexError(tokenResult.error || "No GitHub token available. Please connect your GitHub account.");
-      }
-
-      githubToken = tokenResult.token;
-    }
+    const githubToken = tokenResult.token;
 
     // Start sync record
     const syncId = await ctx.runMutation(internal.syncHistory.createSyncRecord, {
@@ -125,7 +128,7 @@ export const syncStarredRepositories = action({
 
         const { response, token: updatedToken } = await fetchGitHubWithRetry(
           ctx,
-          clerkUserId,
+          subject,
           `${GITHUB_API_BASE}/user/starred?per_page=100&page=${page}&sort=created&direction=desc`,
           currentToken
         );
@@ -282,31 +285,26 @@ export const syncStarredRepositories = action({
   },
 });
 
-// Star a repository via GitHub API
-// Now uses OAuth token from database with optional legacy token parameter
+// Star a repository via GitHub API using the authenticated user's OAuth token.
 export const starRepository = action({
   args: {
     clerkUserId: v.string(),
-    githubToken: v.optional(v.string()), // Now optional for OAuth
+    githubToken: v.optional(v.string()), // Retained and ignored.
     owner: v.string(),
     repo: v.string(),
   },
-  handler: async (ctx, { clerkUserId, githubToken: providedToken, owner, repo }) => {
-    // Get token (OAuth or provided)
-    let token: string;
-    if (providedToken) {
-      token = providedToken;
-    } else {
-      const tokenResult = await ctx.runAction(internal.github.getValidGithubTokenInternal, { clerkUserId });
-      if (!tokenResult.token) {
-        throw new ConvexError(tokenResult.error || "No GitHub token available");
-      }
-      token = tokenResult.token;
+  handler: async (ctx, { clerkUserId, owner, repo }) => {
+    const user = await requireAuthenticatedActionUser(ctx, clerkUserId);
+    const subject = user.clerkUserId;
+    const tokenResult = await ctx.runAction(internal.github.getValidGithubTokenInternal, { clerkUserId: subject });
+    if (!tokenResult.token) {
+      throw new ConvexError(tokenResult.error || "No GitHub token available");
     }
+    const token = tokenResult.token;
 
     const { response } = await fetchGitHubWithRetry(
       ctx,
-      clerkUserId,
+      subject,
       `${GITHUB_API_BASE}/user/starred/${owner}/${repo}`,
       token,
       {
@@ -326,31 +324,26 @@ export const starRepository = action({
   },
 });
 
-// Unstar a repository via GitHub API
-// Now uses OAuth token from database with optional legacy token parameter
+// Unstar a repository via GitHub API using the authenticated user's OAuth token.
 export const unstarRepository = action({
   args: {
     clerkUserId: v.string(),
-    githubToken: v.optional(v.string()), // Now optional for OAuth
+    githubToken: v.optional(v.string()), // Retained and ignored.
     owner: v.string(),
     repo: v.string(),
   },
-  handler: async (ctx, { clerkUserId, githubToken: providedToken, owner, repo }) => {
-    // Get token (OAuth or provided)
-    let token: string;
-    if (providedToken) {
-      token = providedToken;
-    } else {
-      const tokenResult = await ctx.runAction(internal.github.getValidGithubTokenInternal, { clerkUserId });
-      if (!tokenResult.token) {
-        throw new ConvexError(tokenResult.error || "No GitHub token available");
-      }
-      token = tokenResult.token;
+  handler: async (ctx, { clerkUserId, owner, repo }) => {
+    const user = await requireAuthenticatedActionUser(ctx, clerkUserId);
+    const subject = user.clerkUserId;
+    const tokenResult = await ctx.runAction(internal.github.getValidGithubTokenInternal, { clerkUserId: subject });
+    if (!tokenResult.token) {
+      throw new ConvexError(tokenResult.error || "No GitHub token available");
     }
+    const token = tokenResult.token;
 
     const { response } = await fetchGitHubWithRetry(
       ctx,
-      clerkUserId,
+      subject,
       `${GITHUB_API_BASE}/user/starred/${owner}/${repo}`,
       token,
       { method: "DELETE" }
@@ -363,45 +356,37 @@ export const unstarRepository = action({
       throw new ConvexError(`Failed to unstar repository: ${response.status}`);
     }
 
-    // Remove from local database
-    const user = await ctx.runQuery(internal.users.getUserByClerkId, { clerkUserId });
-    if (user) {
-      await ctx.runMutation(internal.repositories.removeRepositoryByGitHubId, {
-        userId: user._id,
-        owner,
-        repo,
-      });
-    }
+    // Remove only the authenticated user's local repository record.
+    await ctx.runMutation(internal.repositories.removeRepositoryByGitHubId, {
+      userId: user._id,
+      owner,
+      repo,
+    });
 
     return { success: true };
   },
 });
 
-// Check if repository is starred
-// Now uses OAuth token from database with optional legacy token parameter
+// Check whether a repository is starred by the authenticated GitHub account.
 export const isRepositoryStarred = action({
   args: {
     clerkUserId: v.string(),
-    githubToken: v.optional(v.string()), // Now optional for OAuth
+    githubToken: v.optional(v.string()), // Retained and ignored.
     owner: v.string(),
     repo: v.string(),
   },
-  handler: async (ctx, { clerkUserId, githubToken: providedToken, owner, repo }) => {
-    // Get token (OAuth or provided)
-    let token: string;
-    if (providedToken) {
-      token = providedToken;
-    } else {
-      const tokenResult = await ctx.runAction(internal.github.getValidGithubTokenInternal, { clerkUserId });
-      if (!tokenResult.token) {
-        throw new ConvexError(tokenResult.error || "No GitHub token available");
-      }
-      token = tokenResult.token;
+  handler: async (ctx, { clerkUserId, owner, repo }) => {
+    const user = await requireAuthenticatedActionUser(ctx, clerkUserId);
+    const subject = user.clerkUserId;
+    const tokenResult = await ctx.runAction(internal.github.getValidGithubTokenInternal, { clerkUserId: subject });
+    if (!tokenResult.token) {
+      throw new ConvexError(tokenResult.error || "No GitHub token available");
     }
+    const token = tokenResult.token;
 
     const { response } = await fetchGitHubWithRetry(
       ctx,
-      clerkUserId,
+      subject,
       `${GITHUB_API_BASE}/user/starred/${owner}/${repo}`,
       token
     );
@@ -410,27 +395,21 @@ export const isRepositoryStarred = action({
   },
 });
 
-// Get GitHub rate limit status
-// Now uses OAuth token from database with optional legacy token parameter
+// Get GitHub rate-limit status for the authenticated GitHub account.
 export const getRateLimitStatus = action({
   args: {
-    clerkUserId: v.optional(v.string()), // Required for OAuth path
-    githubToken: v.optional(v.string()), // Now optional for OAuth
+    clerkUserId: v.optional(v.string()), // Retained for compatibility; auth is authoritative.
+    githubToken: v.optional(v.string()), // Retained and ignored.
   },
-  handler: async (ctx, { clerkUserId, githubToken: providedToken }) => {
-    // Get token (OAuth or provided)
-    let token: string;
-    if (providedToken) {
-      token = providedToken;
-    } else if (clerkUserId) {
-      const tokenResult = await ctx.runAction(internal.github.getValidGithubTokenInternal, { clerkUserId });
-      if (!tokenResult.token) {
-        throw new ConvexError(tokenResult.error || "No GitHub token available");
-      }
-      token = tokenResult.token;
-    } else {
-      throw new ConvexError("Either clerkUserId or githubToken must be provided");
+  handler: async (ctx, { clerkUserId }): Promise<GitHubRateLimitStatus> => {
+    const user = await requireAuthenticatedActionUser(ctx, clerkUserId);
+    const tokenResult = await ctx.runAction(internal.github.getValidGithubTokenInternal, {
+      clerkUserId: user.clerkUserId,
+    });
+    if (!tokenResult.token) {
+      throw new ConvexError(tokenResult.error || "No GitHub token available");
     }
+    const token = tokenResult.token;
 
     const response = await fetch(
       `${GITHUB_API_BASE}/rate_limit`,

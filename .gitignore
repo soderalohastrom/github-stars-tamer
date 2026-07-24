@@ -10,6 +10,8 @@ npm-debug.*
 *.orig.*
 web-build/
 .env*
+!.env.example
+.codebase-memory/
 .DS_Store
 *.log
 .convex/_generated/

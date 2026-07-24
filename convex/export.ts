@@ -1,5 +1,6 @@
 import { ConvexError, v } from "convex/values";
 import { query } from "./_generated/server";
+import { requireAuthenticatedUser } from "./authz";
 
 // Helper to format numbers nicely (1234 -> 1.2k)
 const formatNumber = (num: number): string => {
@@ -39,14 +40,7 @@ export const exportListToMarkdown = query({
     listId: v.id("lists"),
   },
   handler: async (ctx, args) => {
-    const user = await ctx.db
-      .query("users")
-      .withIndex("by_clerk_user_id", (q) => q.eq("clerkUserId", args.clerkUserId))
-      .first();
-
-    if (!user) {
-      throw new ConvexError("User not found");
-    }
+    const user = await requireAuthenticatedUser(ctx, args.clerkUserId);
 
     const list = await ctx.db.get(args.listId);
     if (!list || list.ownerId !== user._id) {
@@ -66,7 +60,7 @@ export const exportListToMarkdown = query({
     const repositories = await Promise.all(
       listRepos.map(async (lr) => {
         const repo = await ctx.db.get(lr.repositoryId);
-        if (!repo) return null;
+        if (!repo || repo.userId !== user._id) return null;
         return {
           ...repo,
           listNotes: lr.notes,
@@ -136,14 +130,7 @@ export const exportListToJson = query({
     listId: v.id("lists"),
   },
   handler: async (ctx, args) => {
-    const user = await ctx.db
-      .query("users")
-      .withIndex("by_clerk_user_id", (q) => q.eq("clerkUserId", args.clerkUserId))
-      .first();
-
-    if (!user) {
-      throw new ConvexError("User not found");
-    }
+    const user = await requireAuthenticatedUser(ctx, args.clerkUserId);
 
     const list = await ctx.db.get(args.listId);
     if (!list || list.ownerId !== user._id) {
@@ -163,7 +150,7 @@ export const exportListToJson = query({
     const repositories = await Promise.all(
       listRepos.map(async (lr) => {
         const repo = await ctx.db.get(lr.repositoryId);
-        if (!repo) return null;
+        if (!repo || repo.userId !== user._id) return null;
         return {
           githubId: repo.githubId,
           name: repo.name,
@@ -212,20 +199,14 @@ export const exportAllData = query({
     clerkUserId: v.string(),
   },
   handler: async (ctx, args) => {
-    const user = await ctx.db
-      .query("users")
-      .withIndex("by_clerk_user_id", (q) => q.eq("clerkUserId", args.clerkUserId))
-      .first();
-
-    if (!user) {
-      throw new ConvexError("User not found");
-    }
+    const user = await requireAuthenticatedUser(ctx, args.clerkUserId);
 
     // Get all repositories
     const repositories = await ctx.db
       .query("repositories")
       .withIndex("by_user_id", (q) => q.eq("userId", user._id))
       .collect();
+    const repositoryIds = new Set(repositories.map((repository) => repository._id));
 
     // Get all categories
     const categories = await ctx.db
@@ -255,11 +236,14 @@ export const exportAllData = query({
         return {
           listId: list._id,
           listName: list.name,
-          entries: entries.map((e) => ({
-            repositoryId: e.repositoryId,
-            notes: e.notes,
-            sortOrder: e.sortOrder,
-          })),
+          // Never expose a foreign repository ID if a malformed join row exists.
+          entries: entries
+            .filter((entry) => repositoryIds.has(entry.repositoryId))
+            .map((entry) => ({
+              repositoryId: entry.repositoryId,
+              notes: entry.notes,
+              sortOrder: entry.sortOrder,
+            })),
         };
       })
     );

@@ -2,6 +2,7 @@ import { ConvexError, v } from "convex/values";
 import { action, internalAction, internalMutation, internalQuery } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
+import { assertUserOwns, requireAuthenticatedActionUser } from "./authz";
 
 // GitHub API configuration
 const GITHUB_API_BASE = "https://api.github.com";
@@ -85,7 +86,7 @@ export const fetchReadmeExcerpt = action({
   args: {
     clerkUserId: v.string(),
     repositoryId: v.id("repositories"),
-    githubToken: v.string(),
+    githubToken: v.optional(v.string()),
     forceRefresh: v.optional(v.boolean()),
   },
   handler: async (ctx, args): Promise<{
@@ -95,102 +96,23 @@ export const fetchReadmeExcerpt = action({
     error?: string;
     message?: string;
   }> => {
-    // Get the repository
-    const repository = await ctx.runQuery(internal.readme.getRepositoryById, {
-      repositoryId: args.repositoryId,
+    const user = await requireAuthenticatedActionUser(ctx, args.clerkUserId);
+
+    // Keep the legacy githubToken argument for compatibility, but never use a
+    // client-supplied credential. OAuth tokens stay in server-side actions.
+    const tokenResult = await ctx.runAction(internal.github.getValidGithubTokenInternal, {
+      clerkUserId: user.clerkUserId,
     });
-
-    if (!repository) {
-      throw new ConvexError("Repository not found");
+    if (!tokenResult.token) {
+      throw new ConvexError(tokenResult.error || "No GitHub token available");
     }
 
-    // Check if we already have a cached README
-    if (!args.forceRefresh && repository.readmeExcerpt && repository.readmeFetchedAt) {
-      // Cache for 7 days
-      const cacheAge = Date.now() - repository.readmeFetchedAt;
-      if (cacheAge < 7 * 24 * 60 * 60 * 1000) {
-        return {
-          success: true,
-          cached: true,
-          excerpt: repository.readmeExcerpt,
-        };
-      }
-    }
-
-    try {
-      // Fetch README from GitHub
-      const response = await fetch(
-        `${GITHUB_API_BASE}/repos/${repository.fullName}/readme`,
-        {
-          headers: {
-            Authorization: `Bearer ${args.githubToken}`,
-            Accept: "application/vnd.github+json",
-            "X-GitHub-Api-Version": GITHUB_API_VERSION,
-          },
-        }
-      );
-
-      if (response.status === 404) {
-        // No README found
-        await ctx.runMutation(internal.readme.updateReadmeExcerpt, {
-          repositoryId: args.repositoryId,
-          excerpt: null,
-          sha: null,
-        });
-        return {
-          success: true,
-          cached: false,
-          excerpt: null,
-          message: "No README found",
-        };
-      }
-
-      if (!response.ok) {
-        throw new Error(`GitHub API error: ${response.status}`);
-      }
-
-      const data = await response.json();
-      const sha = data.sha;
-
-      // Check if SHA matches cached version
-      if (!args.forceRefresh && repository.readmeSha === sha && repository.readmeExcerpt) {
-        return {
-          success: true,
-          cached: true,
-          excerpt: repository.readmeExcerpt,
-        };
-      }
-
-      // Decode content (base64, line-wrapped by GitHub). V8 runtime has no Buffer.
-      const base64 = (data.content ?? "").replace(/\s/g, "");
-      const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
-      const content = new TextDecoder("utf-8").decode(bytes);
-
-      // Clean and truncate
-      const cleaned = cleanMarkdown(content);
-      const excerpt = truncateReadme(cleaned);
-
-      // Save to database
-      await ctx.runMutation(internal.readme.updateReadmeExcerpt, {
-        repositoryId: args.repositoryId,
-        excerpt,
-        sha,
-      });
-
-      return {
-        success: true,
-        cached: false,
-        excerpt,
-      };
-    } catch (error) {
-      console.error(`Failed to fetch README for ${repository.fullName}:`, error);
-      return {
-        success: false,
-        cached: false,
-        excerpt: null,
-        error: error instanceof Error ? error.message : "Unknown error",
-      };
-    }
+    return await ctx.runAction(internal.readme.fetchReadmeExcerptInternal, {
+      userId: user._id,
+      repositoryId: args.repositoryId,
+      githubToken: tokenResult.token,
+      forceRefresh: args.forceRefresh,
+    });
   },
 });
 
@@ -201,10 +123,18 @@ export const fetchReadmesBatch = action({
   args: {
     clerkUserId: v.string(),
     repositoryIds: v.array(v.id("repositories")),
-    githubToken: v.string(),
+    githubToken: v.optional(v.string()),
     forceRefresh: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
+    const user = await requireAuthenticatedActionUser(ctx, args.clerkUserId);
+    const tokenResult = await ctx.runAction(internal.github.getValidGithubTokenInternal, {
+      clerkUserId: user.clerkUserId,
+    });
+    if (!tokenResult.token) {
+      throw new ConvexError(tokenResult.error || "No GitHub token available");
+    }
+
     const results: {
       repositoryId: Id<"repositories">;
       success: boolean;
@@ -221,8 +151,9 @@ export const fetchReadmesBatch = action({
         }
 
         const result = await ctx.runAction(internal.readme.fetchReadmeExcerptInternal, {
+          userId: user._id,
           repositoryId,
-          githubToken: args.githubToken,
+          githubToken: tokenResult.token,
           forceRefresh: args.forceRefresh,
         });
 
@@ -262,6 +193,7 @@ export const fetchReadmesBatch = action({
  */
 export const fetchReadmeExcerptInternal = internalAction({
   args: {
+    userId: v.id("users"),
     repositoryId: v.id("repositories"),
     githubToken: v.string(),
     forceRefresh: v.optional(v.boolean()),
@@ -271,8 +203,10 @@ export const fetchReadmeExcerptInternal = internalAction({
     cached: boolean;
     excerpt: string | null;
     error?: string;
+    message?: string;
   }> => {
     const repository = await ctx.runQuery(internal.readme.getRepositoryById, {
+      userId: args.userId,
       repositoryId: args.repositoryId,
     });
 
@@ -311,6 +245,7 @@ export const fetchReadmeExcerptInternal = internalAction({
 
       if (response.status === 404) {
         await ctx.runMutation(internal.readme.updateReadmeExcerpt, {
+          userId: args.userId,
           repositoryId: args.repositoryId,
           excerpt: null,
           sha: null,
@@ -319,6 +254,7 @@ export const fetchReadmeExcerptInternal = internalAction({
           success: true,
           cached: false,
           excerpt: null,
+          message: "No README found",
         };
       }
 
@@ -351,6 +287,7 @@ export const fetchReadmeExcerptInternal = internalAction({
       const excerpt = truncateReadme(cleaned);
 
       await ctx.runMutation(internal.readme.updateReadmeExcerpt, {
+        userId: args.userId,
         repositoryId: args.repositoryId,
         excerpt,
         sha,
@@ -389,13 +326,7 @@ export const createReadmeFetchJob = action({
     batchId?: string;
     repositoryCount?: number;
   }> => {
-    const user = await ctx.runQuery(internal.users.getUserByClerkId, {
-      clerkUserId: args.clerkUserId,
-    });
-
-    if (!user) {
-      throw new ConvexError("User not found");
-    }
+    const user = await requireAuthenticatedActionUser(ctx, args.clerkUserId);
 
     let repoIds = args.repositoryIds || [];
 
@@ -434,9 +365,16 @@ export const createReadmeFetchJob = action({
 // Internal queries and mutations
 
 export const getRepositoryById = internalQuery({
-  args: { repositoryId: v.id("repositories") },
-  handler: async (ctx, { repositoryId }) => {
-    return await ctx.db.get(repositoryId);
+  args: {
+    userId: v.id("users"),
+    repositoryId: v.id("repositories"),
+  },
+  handler: async (ctx, { userId, repositoryId }) => {
+    const repository = await ctx.db.get(repositoryId);
+    if (!repository || repository.userId !== userId) {
+      return null;
+    }
+    return repository;
   },
 });
 
@@ -456,11 +394,18 @@ export const getRepositoriesWithoutReadme = internalQuery({
 
 export const updateReadmeExcerpt = internalMutation({
   args: {
+    userId: v.id("users"),
     repositoryId: v.id("repositories"),
     excerpt: v.union(v.string(), v.null()),
     sha: v.union(v.string(), v.null()),
   },
-  handler: async (ctx, { repositoryId, excerpt, sha }) => {
+  handler: async (ctx, { userId, repositoryId, excerpt, sha }) => {
+    const repository = await ctx.db.get(repositoryId);
+    if (!repository) {
+      throw new ConvexError("Repository not found or access denied");
+    }
+    assertUserOwns(repository.userId, userId, "Repository");
+
     await ctx.db.patch(repositoryId, {
       readmeExcerpt: excerpt ?? undefined,
       readmeSha: sha ?? undefined,
@@ -476,6 +421,19 @@ export const createJob = internalMutation({
     batchId: v.string(),
   },
   handler: async (ctx, { userId, repositoryIds, batchId }) => {
+    const user = await ctx.db.get(userId);
+    if (!user) {
+      throw new ConvexError("User not found");
+    }
+
+    for (const repositoryId of repositoryIds) {
+      const repository = await ctx.db.get(repositoryId);
+      if (!repository) {
+        throw new ConvexError("Repository not found or access denied");
+      }
+      assertUserOwns(repository.userId, userId, "Repository");
+    }
+
     return await ctx.db.insert("aiProcessingJobs", {
       userId,
       jobType: "fetch_readmes",

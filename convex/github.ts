@@ -1,9 +1,11 @@
 import { ConvexError, v } from "convex/values";
 import { action, internalAction, internalMutation, internalQuery, mutation, query } from "./_generated/server";
 import { internal } from "./_generated/api";
+import {
+  requireAuthenticatedActionUser,
+  requireAuthenticatedUser,
+} from "./authz";
 
-// Token refresh threshold: refresh if token will expire within 5 minutes
-const TOKEN_EXPIRY_THRESHOLD_MS = 5 * 60 * 1000;
 // Minimum time between token fetches from Clerk (to avoid excessive API calls)
 const MIN_TOKEN_FETCH_INTERVAL_MS = 60 * 1000; // 1 minute
 
@@ -19,14 +21,7 @@ export const linkGithubAccount = mutation({
     githubEmail: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    const user = await ctx.db
-      .query("users")
-      .withIndex("by_clerk_user_id", (q) => q.eq("clerkUserId", args.clerkUserId))
-      .first();
-
-    if (!user) {
-      throw new ConvexError("User not found. Please ensure user is initialized first.");
-    }
+    const user = await requireAuthenticatedUser(ctx, args.clerkUserId);
 
     const now = Date.now();
 
@@ -35,6 +30,7 @@ export const linkGithubAccount = mutation({
       githubExternalAccountId: args.githubExternalAccountId,
       githubUsername: args.githubUsername,
       githubEmail: args.githubEmail,
+      githubToken: undefined,
       updatedAt: now,
     });
 
@@ -49,18 +45,18 @@ export const linkGithubAccount = mutation({
 export const storeGithubOAuthToken = internalMutation({
   args: {
     clerkUserId: v.string(),
+    userId: v.id("users"),
     accessToken: v.string(),
     scopes: v.array(v.string()),
     expiresAt: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
-    const user = await ctx.db
-      .query("users")
-      .withIndex("by_clerk_user_id", (q) => q.eq("clerkUserId", args.clerkUserId))
-      .first();
-
-    if (!user) {
-      throw new ConvexError("User not found");
+    const user = await ctx.db.get(args.userId);
+    if (!user || user.clerkUserId !== args.clerkUserId) {
+      throw new ConvexError("User not found or access denied");
+    }
+    if (!args.accessToken) {
+      throw new ConvexError("GitHub OAuth token is missing");
     }
 
     const now = Date.now();
@@ -70,6 +66,7 @@ export const storeGithubOAuthToken = internalMutation({
       githubScopes: args.scopes,
       githubTokenExpiresAt: args.expiresAt,
       githubTokenLastFetchedAt: now,
+      githubToken: undefined,
       updatedAt: now,
     });
 
@@ -85,20 +82,14 @@ export const clearGithubToken = mutation({
     clerkUserId: v.string(),
   },
   handler: async (ctx, { clerkUserId }) => {
-    const user = await ctx.db
-      .query("users")
-      .withIndex("by_clerk_user_id", (q) => q.eq("clerkUserId", clerkUserId))
-      .first();
-
-    if (!user) {
-      throw new ConvexError("User not found");
-    }
+    const user = await requireAuthenticatedUser(ctx, clerkUserId);
 
     await ctx.db.patch(user._id, {
       githubAccessToken: undefined,
       githubTokenExpiresAt: undefined,
       githubTokenLastFetchedAt: undefined,
       githubScopes: undefined,
+      githubToken: undefined,
       updatedAt: Date.now(),
     });
 
@@ -136,35 +127,17 @@ export const getGithubTokenInfo = internalQuery({
 });
 
 /**
- * Check if the current token needs refresh.
- */
-function tokenNeedsRefresh(expiresAt: number | undefined, lastFetchedAt: number | undefined): boolean {
-  const now = Date.now();
-
-  // If we have an expiry time and it's within the threshold, refresh
-  if (expiresAt && expiresAt - now < TOKEN_EXPIRY_THRESHOLD_MS) {
-    return true;
-  }
-
-  // If we haven't fetched in a while, proactively refresh (tokens can be revoked)
-  // This is a conservative approach - refresh every 55 minutes
-  const MAX_TOKEN_AGE_MS = 55 * 60 * 1000;
-  if (lastFetchedAt && now - lastFetchedAt > MAX_TOKEN_AGE_MS) {
-    return true;
-  }
-
-  return false;
-}
-
-/**
  * Refresh GitHub OAuth token from Clerk Backend API.
  * Requires CLERK_SECRET_KEY to be set in Convex environment variables.
  */
 export const refreshGithubToken = action({
   args: { clerkUserId: v.string() },
   handler: async (ctx, { clerkUserId }): Promise<{ success: boolean; error?: string }> => {
+    const user = await requireAuthenticatedActionUser(ctx, clerkUserId);
+    const subject = user.clerkUserId;
+
     // Get current token info
-    const tokenInfo = await ctx.runQuery(internal.github.getGithubTokenInfo, { clerkUserId });
+    const tokenInfo = await ctx.runQuery(internal.github.getGithubTokenInfo, { clerkUserId: subject });
 
     if (!tokenInfo) {
       return { success: false, error: "User not found" };
@@ -192,7 +165,7 @@ export const refreshGithubToken = action({
     try {
       // Clerk API endpoint for OAuth access tokens
       const response = await fetch(
-        `https://api.clerk.com/v1/users/${clerkUserId}/oauth_access_tokens/github`,
+        `https://api.clerk.com/v1/users/${subject}/oauth_access_tokens/github`,
         {
           method: "GET",
           headers: {
@@ -235,7 +208,8 @@ export const refreshGithubToken = action({
 
       // Store the token
       await ctx.runMutation(internal.github.storeGithubOAuthToken, {
-        clerkUserId,
+        clerkUserId: subject,
+        userId: user._id,
         accessToken,
         scopes,
         expiresAt,
@@ -259,37 +233,14 @@ export const refreshGithubToken = action({
 export const getValidGithubToken = action({
   args: { clerkUserId: v.string() },
   handler: async (ctx, { clerkUserId }): Promise<{ token: string | null; error?: string }> => {
-    // Get current token info
-    const tokenInfo = await ctx.runQuery(internal.github.getGithubTokenInfo, { clerkUserId });
+    await requireAuthenticatedActionUser(ctx, clerkUserId);
 
-    if (!tokenInfo) {
-      return { token: null, error: "User not found" };
-    }
-
-    if (!tokenInfo.githubExternalAccountId) {
-      return { token: null, error: "No GitHub account linked. Please connect GitHub in settings." };
-    }
-
-    // Check if token needs refresh
-    const needsRefresh = !tokenInfo.accessToken ||
-      tokenNeedsRefresh(tokenInfo.expiresAt ?? undefined, tokenInfo.lastFetchedAt ?? undefined);
-
-    if (needsRefresh) {
-      const refreshResult = await ctx.runAction(internal.github.refreshGithubTokenInternal, { clerkUserId });
-      if (!refreshResult.success) {
-        return { token: null, error: refreshResult.error };
-      }
-
-      // Get the fresh token
-      const freshTokenInfo = await ctx.runQuery(internal.github.getGithubTokenInfo, { clerkUserId });
-      if (!freshTokenInfo?.accessToken) {
-        return { token: null, error: "Failed to retrieve refreshed token" };
-      }
-
-      return { token: freshTokenInfo.accessToken };
-    }
-
-    return { token: tokenInfo.accessToken ?? null };
+    // Kept as a compatibility export, but OAuth credentials must never cross
+    // the public Convex boundary. Server-only callers use the internal action.
+    return {
+      token: null,
+      error: "GitHub tokens are only available to server-side actions.",
+    };
   },
 });
 
@@ -399,6 +350,7 @@ export const refreshGithubTokenInternal = internalAction({
 
       await ctx.runMutation(internal.github.storeGithubOAuthToken, {
         clerkUserId,
+        userId: tokenInfo.userId,
         accessToken,
         scopes,
         expiresAt,
@@ -421,20 +373,7 @@ export const refreshGithubTokenInternal = internalAction({
 export const getGithubConnectionStatus = query({
   args: { clerkUserId: v.string() },
   handler: async (ctx, { clerkUserId }) => {
-    const user = await ctx.db
-      .query("users")
-      .withIndex("by_clerk_user_id", (q) => q.eq("clerkUserId", clerkUserId))
-      .first();
-
-    if (!user) {
-      return {
-        isConnected: false,
-        githubUsername: null,
-        hasValidToken: false,
-        scopes: [] as string[],
-        lastTokenFetch: null as number | null,
-      };
-    }
+    const user = await requireAuthenticatedUser(ctx, clerkUserId);
 
     const hasValidToken = !!user.githubAccessToken &&
       (!user.githubTokenExpiresAt || user.githubTokenExpiresAt > Date.now());
@@ -456,14 +395,7 @@ export const getGithubConnectionStatus = query({
 export const unlinkGithubAccount = mutation({
   args: { clerkUserId: v.string() },
   handler: async (ctx, { clerkUserId }) => {
-    const user = await ctx.db
-      .query("users")
-      .withIndex("by_clerk_user_id", (q) => q.eq("clerkUserId", clerkUserId))
-      .first();
-
-    if (!user) {
-      throw new ConvexError("User not found");
-    }
+    const user = await requireAuthenticatedUser(ctx, clerkUserId);
 
     await ctx.db.patch(user._id, {
       githubExternalAccountId: undefined,
@@ -473,6 +405,7 @@ export const unlinkGithubAccount = mutation({
       githubScopes: undefined,
       githubUsername: undefined,
       githubEmail: undefined,
+      githubToken: undefined,
       updatedAt: Date.now(),
     });
 

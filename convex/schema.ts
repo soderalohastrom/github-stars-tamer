@@ -393,7 +393,13 @@ export default defineSchema({
   aiSettings: defineTable({
     userId: v.id("users"),
     // Provider settings
-    aiProvider: v.union(v.literal("claude"), v.literal("openai"), v.literal("ollama"), v.literal("cerebras")),
+    aiProvider: v.union(
+      v.literal("cloudflare"),
+      v.literal("claude"),
+      v.literal("openai"),
+      v.literal("ollama"),
+      v.literal("cerebras")
+    ),
     aiModel: v.string(), // e.g., "claude-3-haiku-20240307", "gpt-4o-mini"
     enableAI: v.boolean(),
     // Ollama-specific (legacy, optional)
@@ -470,7 +476,12 @@ export default defineSchema({
   aiUsage: defineTable({
     userId: v.id("users"),
     jobId: v.optional(v.id("aiProcessingJobs")),
-    provider: v.union(v.literal("claude"), v.literal("openai"), v.literal("cerebras")),
+    provider: v.union(
+      v.literal("cloudflare"),
+      v.literal("claude"),
+      v.literal("openai"),
+      v.literal("cerebras")
+    ),
     model: v.string(),
     inputTokens: v.number(),
     outputTokens: v.number(),

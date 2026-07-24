@@ -1,10 +1,10 @@
-const authConfig = {
+import { AuthConfig } from "convex/server";
+
+export default {
   providers: [
     {
-      domain: "https://cuddly-cheetah-98.clerk.accounts.dev",
+      domain: process.env.CLERK_JWT_ISSUER_DOMAIN!,
       applicationID: "convex",
     },
   ],
-};
-
-export default authConfig;
+} satisfies AuthConfig;

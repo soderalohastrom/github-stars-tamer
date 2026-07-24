@@ -1,27 +1,53 @@
 import { Tabs } from 'expo-router';
-import { useColorScheme } from 'react-native';
+import { Platform, useColorScheme, useWindowDimensions } from 'react-native';
 import { Feather } from '@expo/vector-icons';
 
 export default function TabsLayout() {
   const colorScheme = useColorScheme();
   const isDark = colorScheme === 'dark';
+  const { width } = useWindowDimensions();
+  const isDesktop = Platform.OS === 'web' && width >= 960;
 
   return (
     <Tabs
       screenOptions={{
         headerShown: false,
-        tabBarStyle: {
-          backgroundColor: isDark ? '#0f0f23' : '#ffffff',
-          borderTopColor: isDark ? '#374151' : '#e5e7eb',
-          paddingBottom: 8,
-          height: 88,
-        },
-        tabBarActiveTintColor: '#3b82f6',
-        tabBarInactiveTintColor: isDark ? '#9ca3af' : '#6b7280',
+        tabBarPosition: isDesktop ? 'left' : 'bottom',
+        tabBarStyle: isDesktop
+          ? {
+              width: 224,
+              backgroundColor: isDark ? '#10100F' : '#F5F0E6',
+              borderRightColor: isDark ? '#45433E' : '#CFC6B8',
+              borderRightWidth: 1,
+              borderTopWidth: 0,
+              paddingTop: 24,
+              paddingHorizontal: 12,
+            }
+          : {
+              backgroundColor: isDark ? '#10100F' : '#F5F0E6',
+              borderTopColor: isDark ? '#45433E' : '#CFC6B8',
+              paddingBottom: 8,
+              height: 82,
+            },
+        tabBarItemStyle: isDesktop
+          ? {
+              minHeight: 50,
+              marginVertical: 3,
+              borderRadius: 8,
+              paddingHorizontal: 10,
+            }
+          : undefined,
+        tabBarLabelPosition: isDesktop ? 'beside-icon' : 'below-icon',
+        tabBarActiveBackgroundColor: isDesktop
+          ? isDark ? '#24211B' : '#FFF3BE'
+          : 'transparent',
+        tabBarActiveTintColor: isDark ? '#FFD84D' : '#A33A23',
+        tabBarInactiveTintColor: isDark ? '#AAA59B' : '#625E57',
         tabBarLabelStyle: {
-          fontSize: 12,
-          fontWeight: '500',
-          marginBottom: 4,
+          fontSize: isDesktop ? 13 : 11,
+          fontWeight: '700',
+          letterSpacing: isDesktop ? 0.2 : 0,
+          marginBottom: isDesktop ? 0 : 4,
         },
       }}
     >

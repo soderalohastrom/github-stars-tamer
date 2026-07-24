@@ -1,18 +1,24 @@
 import { ConvexError, v } from "convex/values";
 import {
   action,
+  internalAction,
   internalMutation,
   internalQuery,
   mutation,
   query,
 } from "./_generated/server";
-import { internal, api } from "./_generated/api";
+import { internal } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
+import {
+  assertUserOwns,
+  requireAuthenticatedActionUser,
+  requireAuthenticatedUser,
+} from "./authz";
 
 // Default AI settings
 const DEFAULT_AI_SETTINGS = {
-  aiProvider: "claude" as const,
-  aiModel: "claude-haiku-4-5",
+  aiProvider: "cloudflare" as const,
+  aiModel: "@cf/meta/llama-3.1-8b-instruct-fast",
   enableAI: false,
   includeReadme: true,
   batchSize: 10,
@@ -25,8 +31,24 @@ const DEFAULT_AI_SETTINGS = {
   },
 };
 
+function assertLegacyUserIdMatches(
+  user: { clerkUserId: string },
+  suppliedUserId?: string,
+): void {
+  if (suppliedUserId !== undefined && suppliedUserId !== user.clerkUserId) {
+    throw new ConvexError("Authenticated user does not match userId");
+  }
+}
+
 // Model options by provider
 export const MODEL_OPTIONS = {
+  cloudflare: [
+    {
+      id: "@cf/meta/llama-3.1-8b-instruct-fast",
+      name: "Llama 3.1 8B (Cloudflare Workers AI)",
+      description: "Free default via the configured Cloudflare AI Worker",
+    },
+  ],
   claude: [
     {
       id: "claude-haiku-4-5",
@@ -87,17 +109,8 @@ export const getAiSettings = query({
     userId: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    const clerkId = args.clerkUserId || args.userId;
-    if (!clerkId) return null;
-
-    const user = await ctx.db
-      .query("users")
-      .withIndex("by_clerk_user_id", (q) => q.eq("clerkUserId", clerkId))
-      .first();
-
-    if (!user) {
-      return null;
-    }
+    const user = await requireAuthenticatedUser(ctx, args.clerkUserId);
+    assertLegacyUserIdMatches(user, args.userId);
 
     const aiSettings = await ctx.db
       .query("aiSettings")
@@ -122,7 +135,13 @@ export const updateAiSettings = mutation({
     clerkUserId: v.optional(v.string()),
     userId: v.optional(v.string()),
     aiProvider: v.optional(
-      v.union(v.literal("claude"), v.literal("openai"), v.literal("ollama"), v.literal("cerebras"))
+      v.union(
+        v.literal("cloudflare"),
+        v.literal("claude"),
+        v.literal("openai"),
+        v.literal("ollama"),
+        v.literal("cerebras")
+      )
     ),
     aiModel: v.optional(v.string()),
     enableAI: v.optional(v.boolean()),
@@ -143,19 +162,8 @@ export const updateAiSettings = mutation({
     ),
   },
   handler: async (ctx, args) => {
-    const clerkId = args.clerkUserId || args.userId;
-    if (!clerkId) {
-      throw new ConvexError("User ID is required");
-    }
-
-    const user = await ctx.db
-      .query("users")
-      .withIndex("by_clerk_user_id", (q) => q.eq("clerkUserId", clerkId))
-      .first();
-
-    if (!user) {
-      throw new ConvexError("User not found");
-    }
+    const user = await requireAuthenticatedUser(ctx, args.clerkUserId);
+    assertLegacyUserIdMatches(user, args.userId);
 
     const existingSettings = await ctx.db
       .query("aiSettings")
@@ -194,7 +202,7 @@ export const updateAiSettings = mutation({
       // Update existing settings
       await ctx.db.patch(existingSettings._id, {
         aiProvider:
-          args.aiProvider ?? existingSettings.aiProvider ?? "claude",
+          args.aiProvider ?? existingSettings.aiProvider ?? DEFAULT_AI_SETTINGS.aiProvider,
         aiModel: args.aiModel ?? existingSettings.aiModel,
         enableAI: args.enableAI ?? existingSettings.enableAI,
         ollamaEndpoint: args.ollamaEndpoint ?? existingSettings.ollamaEndpoint,
@@ -252,6 +260,7 @@ export const testOllamaConnection = mutation({
     timeoutMs: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
+    await requireAuthenticatedUser(ctx);
     // This is a mutation that returns info for the client to test
     // The actual test happens client-side since Convex mutations can't make HTTP calls
     // Return the config for client-side testing
@@ -275,6 +284,7 @@ export const testOllamaConnectionAction = action({
     timeoutMs: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
+    await requireAuthenticatedActionUser(ctx);
     const timeout = args.timeoutMs || 10000;
 
     try {
@@ -340,14 +350,7 @@ export const getUserSuggestions = query({
     ),
   },
   handler: async (ctx, args) => {
-    const user = await ctx.db
-      .query("users")
-      .withIndex("by_clerk_user_id", (q) => q.eq("clerkUserId", args.clerkUserId))
-      .first();
-
-    if (!user) {
-      return [];
-    }
+    const user = await requireAuthenticatedUser(ctx, args.clerkUserId);
 
     if (args.status) {
       return await ctx.db
@@ -380,14 +383,7 @@ export const getSuggestionsWithDetails = query({
     limit: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
-    const user = await ctx.db
-      .query("users")
-      .withIndex("by_clerk_user_id", (q) => q.eq("clerkUserId", args.clerkUserId))
-      .first();
-
-    if (!user) {
-      return [];
-    }
+    const user = await requireAuthenticatedUser(ctx, args.clerkUserId);
 
     let suggestions;
     if (args.status) {
@@ -410,6 +406,9 @@ export const getSuggestionsWithDetails = query({
     const enriched = await Promise.all(
       suggestions.map(async (suggestion) => {
         const repository = await ctx.db.get(suggestion.repositoryId);
+        if (repository) {
+          assertUserOwns(repository.userId, user._id, "Repository");
+        }
         return {
           ...suggestion,
           repository: repository
@@ -437,14 +436,7 @@ export const requestCategorizationJob = mutation({
     categorizeAll: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
-    const user = await ctx.db
-      .query("users")
-      .withIndex("by_clerk_user_id", (q) => q.eq("clerkUserId", args.clerkUserId))
-      .first();
-
-    if (!user) {
-      throw new ConvexError("User not found");
-    }
+    const user = await requireAuthenticatedUser(ctx, args.clerkUserId);
 
     // Get AI settings
     const settings = await ctx.db
@@ -478,6 +470,14 @@ export const requestCategorizationJob = mutation({
       repoIds = allRepos
         .filter((repo) => !categorizedRepoIds.has(repo._id))
         .map((repo) => repo._id);
+    } else {
+      for (const repositoryId of repoIds) {
+        const repository = await ctx.db.get(repositoryId);
+        if (!repository) {
+          throw new ConvexError("Repository not found");
+        }
+        assertUserOwns(repository.userId, user._id, "Repository");
+      }
     }
 
     if (repoIds.length === 0) {
@@ -513,7 +513,11 @@ export const getJobStatus = query({
     jobId: v.id("aiProcessingJobs"),
   },
   handler: async (ctx, { jobId }) => {
-    return await ctx.db.get(jobId);
+    const user = await requireAuthenticatedUser(ctx);
+    const job = await ctx.db.get(jobId);
+    if (!job) return null;
+    assertUserOwns(job.userId, user._id, "Job");
+    return job;
   },
 });
 
@@ -523,14 +527,7 @@ export const getActiveJobs = query({
     clerkUserId: v.string(),
   },
   handler: async (ctx, args) => {
-    const user = await ctx.db
-      .query("users")
-      .withIndex("by_clerk_user_id", (q) => q.eq("clerkUserId", args.clerkUserId))
-      .first();
-
-    if (!user) {
-      return [];
-    }
+    const user = await requireAuthenticatedUser(ctx, args.clerkUserId);
 
     const pendingJobs = await ctx.db
       .query("aiProcessingJobs")
@@ -563,9 +560,12 @@ export const processNextBatch = action({
     result?: any;
     progress?: { processed: number; total: number };
   }> => {
+    const user = await requireAuthenticatedActionUser(ctx, args.clerkUserId);
+
     // Get job details
     const job = await ctx.runQuery(internal.ai.getJobById, {
       jobId: args.jobId,
+      userId: user._id,
     });
 
     if (!job) {
@@ -576,15 +576,6 @@ export const processNextBatch = action({
       return { success: false, message: "Job is not active" };
     }
 
-    // Get user and settings
-    const user = await ctx.runQuery(internal.users.getUserByClerkId, {
-      clerkUserId: args.clerkUserId,
-    });
-
-    if (!user) {
-      throw new ConvexError("User not found");
-    }
-
     const settings = await ctx.runQuery(internal.ai.getSettingsByUserId, {
       userId: user._id,
     });
@@ -592,10 +583,11 @@ export const processNextBatch = action({
     // Mark job as processing
     await ctx.runMutation(internal.ai.updateJobStatus, {
       jobId: args.jobId,
+      userId: user._id,
       status: "processing",
     });
 
-    const provider = settings?.aiProvider || "claude";
+    const provider = settings?.aiProvider || DEFAULT_AI_SETTINGS.aiProvider;
     const batchSize = settings?.batchSize || 10;
     const repoIds = job.repositoryIds || [];
     const processed = job.progress?.processed || 0;
@@ -607,6 +599,7 @@ export const processNextBatch = action({
       // Job complete
       await ctx.runMutation(internal.ai.completeJob, {
         jobId: args.jobId,
+        userId: user._id,
       });
       return { success: true, complete: true };
     }
@@ -614,10 +607,21 @@ export const processNextBatch = action({
     try {
       let result;
 
-      if (provider === "claude") {
+      if (provider === "cloudflare") {
+        // Cloudflare Worker is the hosted/free default provider.
+        // Cast is temporary until Convex codegen includes cloudflareAi.ts.
+        result = await ctx.runAction((internal as any).cloudflareAi.categorizeRepositoriesInternal, {
+          userId: user._id,
+          repositoryIds: batchRepoIds,
+          model: settings?.aiModel || "@cf/meta/llama-3.1-8b-instruct",
+          includeReadme: settings?.includeReadme ?? true,
+          batchId: job.batchId,
+          timeoutMs: settings?.advancedSettings?.timeoutMs,
+        });
+      } else if (provider === "claude") {
         // Use Claude AI
-        result = await ctx.runAction(api.claudeAi.categorizeRepositories, {
-          clerkUserId: args.clerkUserId,
+        result = await ctx.runAction(internal.claudeAi.categorizeRepositoriesInternal, {
+          userId: user._id,
           repositoryIds: batchRepoIds,
           model: settings?.aiModel || "claude-haiku-4-5",
           includeReadme: settings?.includeReadme ?? true,
@@ -625,8 +629,8 @@ export const processNextBatch = action({
         });
       } else if (provider === "openai") {
         // Use OpenAI
-        result = await ctx.runAction(api.openaiAi.categorizeRepositories, {
-          clerkUserId: args.clerkUserId,
+        result = await ctx.runAction(internal.openaiAi.categorizeRepositoriesInternal, {
+          userId: user._id,
           repositoryIds: batchRepoIds,
           model: settings?.aiModel || "gpt-5.4-nano",
           includeReadme: settings?.includeReadme ?? true,
@@ -634,8 +638,8 @@ export const processNextBatch = action({
         });
       } else if (provider === "ollama") {
         // Use Ollama (local)
-        result = await ctx.runAction(api.ai.categorizeWithOllama, {
-          clerkUserId: args.clerkUserId,
+        result = await ctx.runAction(internal.ai.categorizeWithOllamaInternal, {
+          userId: user._id,
           repositoryIds: batchRepoIds,
           model: settings?.aiModel || "gemma:2b",
           endpoint: settings?.ollamaEndpoint || "http://localhost:11434",
@@ -647,6 +651,7 @@ export const processNextBatch = action({
       // Update job progress
       await ctx.runMutation(internal.ai.updateJobProgress, {
         jobId: args.jobId,
+        userId: user._id,
         processed: processed + batchRepoIds.length,
         suggestionIds: result.suggestionIds,
       });
@@ -655,6 +660,7 @@ export const processNextBatch = action({
       if (processed + batchRepoIds.length >= repoIds.length) {
         await ctx.runMutation(internal.ai.completeJob, {
           jobId: args.jobId,
+          userId: user._id,
           result: {
             suggestionIds: result.suggestionIds,
             totalSuggestions: result.totalSuggestions,
@@ -677,6 +683,7 @@ export const processNextBatch = action({
       // Mark job as failed
       await ctx.runMutation(internal.ai.failJob, {
         jobId: args.jobId,
+        userId: user._id,
         errorMessage:
           error instanceof Error ? error.message : "Unknown error",
       });
@@ -693,30 +700,47 @@ export const categorizeWithOllama = action({
     model: v.string(),
     endpoint: v.string(),
   },
-  handler: async (ctx, args) => {
-    const user = await ctx.runQuery(internal.users.getUserByClerkId, {
-      clerkUserId: args.clerkUserId,
+  handler: async (ctx, args): Promise<any> => {
+    const user = await requireAuthenticatedActionUser(ctx, args.clerkUserId);
+    return await ctx.runAction((internal as any).ai.categorizeWithOllamaInternal, {
+      userId: user._id,
+      repositoryIds: args.repositoryIds,
+      model: args.model,
+      endpoint: args.endpoint,
     });
+  },
+});
 
-    if (!user) {
-      throw new ConvexError("User not found");
-    }
+// Internal worker for interactive and scheduled Ollama categorization.
+export const categorizeWithOllamaInternal = internalAction({
+  args: {
+    userId: v.id("users"),
+    repositoryIds: v.array(v.id("repositories")),
+    model: v.string(),
+    endpoint: v.string(),
+  },
+  handler: async (ctx, args) => {
 
     // Get repositories
     const repositories = [];
     for (const repoId of args.repositoryIds) {
       const repo = await ctx.runQuery(internal.claudeAi.getRepositoryById, {
         repositoryId: repoId,
+        userId: args.userId,
       });
       if (repo) {
         repositories.push(repo);
       }
     }
 
+    if (repositories.length === 0) {
+      throw new ConvexError("No valid repositories found to categorize");
+    }
+
     // Get existing categories
     const categories = await ctx.runQuery(
       internal.claudeAi.getUserCategoryNames,
-      { userId: user._id }
+      { userId: args.userId }
     );
 
     // Build prompt for Ollama
@@ -765,7 +789,7 @@ Respond with JSON array: [{"repoId": "...", "category": "...", "confidence": 0.8
         const suggestionId = await ctx.runMutation(
           internal.claudeAi.createSuggestion,
           {
-            userId: user._id,
+            userId: args.userId,
             repositoryId: matchingRepo._id,
             suggestedCategoryName: suggestion.category || "Uncategorized",
             confidence: suggestion.confidence || 0.5,
@@ -803,15 +827,23 @@ Respond with JSON array: [{"repoId": "...", "category": "...", "confidence": 0.8
 
 // Internal queries and mutations for job management
 export const getJobById = internalQuery({
-  args: { jobId: v.id("aiProcessingJobs") },
-  handler: async (ctx, { jobId }) => {
-    return await ctx.db.get(jobId);
+  args: {
+    jobId: v.id("aiProcessingJobs"),
+    userId: v.id("users"),
+  },
+  handler: async (ctx, { jobId, userId }) => {
+    const job = await ctx.db.get(jobId);
+    if (!job) return null;
+    assertUserOwns(job.userId, userId, "Job");
+    return job;
   },
 });
 
 export const getSettingsByUserId = internalQuery({
   args: { userId: v.id("users") },
   handler: async (ctx, { userId }) => {
+    const user = await ctx.db.get(userId);
+    if (!user) throw new ConvexError("User not found");
     return await ctx.db
       .query("aiSettings")
       .withIndex("by_user_id", (q) => q.eq("userId", userId))
@@ -822,6 +854,7 @@ export const getSettingsByUserId = internalQuery({
 export const updateJobStatus = internalMutation({
   args: {
     jobId: v.id("aiProcessingJobs"),
+    userId: v.id("users"),
     status: v.union(
       v.literal("pending"),
       v.literal("processing"),
@@ -830,7 +863,10 @@ export const updateJobStatus = internalMutation({
       v.literal("cancelled")
     ),
   },
-  handler: async (ctx, { jobId, status }) => {
+  handler: async (ctx, { jobId, userId, status }) => {
+    const job = await ctx.db.get(jobId);
+    if (!job) throw new ConvexError("Job not found");
+    assertUserOwns(job.userId, userId, "Job");
     await ctx.db.patch(jobId, { status });
   },
 });
@@ -838,12 +874,20 @@ export const updateJobStatus = internalMutation({
 export const updateJobProgress = internalMutation({
   args: {
     jobId: v.id("aiProcessingJobs"),
+    userId: v.id("users"),
     processed: v.number(),
     suggestionIds: v.optional(v.array(v.id("aiCategorizationSuggestions"))),
   },
-  handler: async (ctx, { jobId, processed, suggestionIds }) => {
+  handler: async (ctx, { jobId, userId, processed, suggestionIds }) => {
     const job = await ctx.db.get(jobId);
-    if (!job) return;
+    if (!job) throw new ConvexError("Job not found");
+    assertUserOwns(job.userId, userId, "Job");
+
+    for (const suggestionId of suggestionIds ?? []) {
+      const suggestion = await ctx.db.get(suggestionId);
+      if (!suggestion) throw new ConvexError("Suggestion not found");
+      assertUserOwns(suggestion.userId, userId, "Suggestion");
+    }
 
     const existingSuggestionIds = job.result?.suggestionIds || [];
     const allSuggestionIds = [
@@ -870,6 +914,7 @@ export const updateJobProgress = internalMutation({
 export const completeJob = internalMutation({
   args: {
     jobId: v.id("aiProcessingJobs"),
+    userId: v.id("users"),
     result: v.optional(
       v.object({
         suggestionIds: v.array(v.id("aiCategorizationSuggestions")),
@@ -879,9 +924,16 @@ export const completeJob = internalMutation({
       })
     ),
   },
-  handler: async (ctx, { jobId, result }) => {
+  handler: async (ctx, { jobId, userId, result }) => {
     const job = await ctx.db.get(jobId);
-    if (!job) return;
+    if (!job) throw new ConvexError("Job not found");
+    assertUserOwns(job.userId, userId, "Job");
+
+    for (const suggestionId of result?.suggestionIds ?? []) {
+      const suggestion = await ctx.db.get(suggestionId);
+      if (!suggestion) throw new ConvexError("Suggestion not found");
+      assertUserOwns(suggestion.userId, userId, "Suggestion");
+    }
 
     await ctx.db.patch(jobId, {
       status: "completed",
@@ -894,9 +946,13 @@ export const completeJob = internalMutation({
 export const failJob = internalMutation({
   args: {
     jobId: v.id("aiProcessingJobs"),
+    userId: v.id("users"),
     errorMessage: v.string(),
   },
-  handler: async (ctx, { jobId, errorMessage }) => {
+  handler: async (ctx, { jobId, userId, errorMessage }) => {
+    const job = await ctx.db.get(jobId);
+    if (!job) throw new ConvexError("Job not found");
+    assertUserOwns(job.userId, userId, "Job");
     await ctx.db.patch(jobId, {
       status: "failed",
       errorMessage,
@@ -912,19 +968,16 @@ export const applySuggestion = mutation({
     suggestionId: v.id("aiCategorizationSuggestions"),
   },
   handler: async (ctx, args) => {
-    const user = await ctx.db
-      .query("users")
-      .withIndex("by_clerk_user_id", (q) => q.eq("clerkUserId", args.clerkUserId))
-      .first();
-
-    if (!user) {
-      throw new ConvexError("User not found");
-    }
+    const user = await requireAuthenticatedUser(ctx, args.clerkUserId);
 
     const suggestion = await ctx.db.get(args.suggestionId);
     if (!suggestion || suggestion.userId !== user._id) {
       throw new ConvexError("Suggestion not found");
     }
+
+    const repository = await ctx.db.get(suggestion.repositoryId);
+    if (!repository) throw new ConvexError("Repository not found");
+    assertUserOwns(repository.userId, user._id, "Repository");
 
     if (suggestion.status !== "pending") {
       throw new ConvexError("Suggestion already processed");
@@ -1014,14 +1067,7 @@ export const rejectSuggestion = mutation({
     suggestionId: v.id("aiCategorizationSuggestions"),
   },
   handler: async (ctx, args) => {
-    const user = await ctx.db
-      .query("users")
-      .withIndex("by_clerk_user_id", (q) => q.eq("clerkUserId", args.clerkUserId))
-      .first();
-
-    if (!user) {
-      throw new ConvexError("User not found");
-    }
+    const user = await requireAuthenticatedUser(ctx, args.clerkUserId);
 
     const suggestion = await ctx.db.get(args.suggestionId);
     if (!suggestion || suggestion.userId !== user._id) {
@@ -1043,14 +1089,7 @@ export const getUsageStats = query({
     clerkUserId: v.string(),
   },
   handler: async (ctx, args) => {
-    const user = await ctx.db
-      .query("users")
-      .withIndex("by_clerk_user_id", (q) => q.eq("clerkUserId", args.clerkUserId))
-      .first();
-
-    if (!user) {
-      return null;
-    }
+    const user = await requireAuthenticatedUser(ctx, args.clerkUserId);
 
     const usage = await ctx.db
       .query("aiUsage")
@@ -1096,12 +1135,7 @@ export const saveTaxonomyAsCategories = mutation({
     clearExisting: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
-    const user = await ctx.db
-      .query("users")
-      .withIndex("by_clerk_user_id", (q) => q.eq("clerkUserId", args.clerkUserId))
-      .first();
-
-    if (!user) throw new ConvexError("User not found");
+    const user = await requireAuthenticatedUser(ctx, args.clerkUserId);
 
     // Optionally clear existing categories (only if no repos assigned)
     if (args.clearExisting) {
@@ -1163,12 +1197,7 @@ export const saveTaxonomyAsCategories = mutation({
 export const getPendingSuggestionsCount = query({
   args: { clerkUserId: v.string() },
   handler: async (ctx, { clerkUserId }) => {
-    const user = await ctx.db
-      .query("users")
-      .withIndex("by_clerk_user_id", (q) => q.eq("clerkUserId", clerkUserId))
-      .first();
-
-    if (!user) return 0;
+    const user = await requireAuthenticatedUser(ctx, clerkUserId);
 
     const pending = await ctx.db
       .query("aiCategorizationSuggestions")

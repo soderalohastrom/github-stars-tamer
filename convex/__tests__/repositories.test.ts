@@ -4,11 +4,11 @@ import { createTestConvex } from "./setup.test-helper";
 
 // Helper to set up a user and return userId + clerkUserId
 async function setupUser(t: any, clerkUserId = "clerk_123") {
-  await t.mutation(api.users.upsertUserFromClerk, {
+  await t.withIdentity({ subject: clerkUserId }).mutation(api.users.upsertUserFromClerk, {
     clerkUserId,
     email: `${clerkUserId}@example.com`,
   });
-  const profile = await t.query(api.users.getUserProfile, { clerkUserId });
+  const profile = await t.withIdentity({ subject: clerkUserId }).query(api.users.getUserProfile, { clerkUserId });
   return { clerkUserId, userId: profile!._id };
 }
 
@@ -75,7 +75,7 @@ describe("repositories", () => {
       expect(result.added).toBe(2);
       expect(result.updated).toBe(0);
 
-      const repos = await t.query(api.repositories.getUserRepositories, {
+      const repos = await t.withIdentity({ subject: clerkUserId }).query(api.repositories.getUserRepositories, {
         clerkUserId,
       });
       expect(repos.length).toBe(2);
@@ -92,8 +92,8 @@ describe("repositories", () => {
       });
 
       // Add notes via updateRepositoryMetadata
-      const repos = await t.query(api.repositories.getUserRepositories, { clerkUserId });
-      await t.mutation(api.repositories.updateRepositoryMetadata, {
+      const repos = await t.withIdentity({ subject: clerkUserId }).query(api.repositories.getUserRepositories, { clerkUserId });
+      await t.withIdentity({ subject: clerkUserId }).mutation(api.repositories.updateRepositoryMetadata, {
         clerkUserId,
         repositoryId: repos[0]._id,
         notes: "My custom notes",
@@ -110,7 +110,7 @@ describe("repositories", () => {
       expect(result.updated).toBe(1);
 
       // Verify notes/tags preserved, stars updated
-      const updated = await t.query(api.repositories.getUserRepositories, { clerkUserId });
+      const updated = await t.withIdentity({ subject: clerkUserId }).query(api.repositories.getUserRepositories, { clerkUserId });
       expect(updated[0].stargazersCount).toBe(50);
       expect(updated[0].notes).toBe("My custom notes");
       expect(updated[0].localTags).toEqual(["favorite"]);
@@ -127,8 +127,8 @@ describe("repositories", () => {
         repositories: [makeRepo({ githubId: 1, name: "my-repo" })],
       });
 
-      const repos = await t.query(api.repositories.getUserRepositories, { clerkUserId });
-      const repo = await t.query(api.repositories.getRepository, {
+      const repos = await t.withIdentity({ subject: clerkUserId }).query(api.repositories.getUserRepositories, { clerkUserId });
+      const repo = await t.withIdentity({ subject: clerkUserId }).query(api.repositories.getRepository, {
         userId,
         repositoryId: repos[0]._id,
       });
@@ -136,34 +136,36 @@ describe("repositories", () => {
       expect(repo!.name).toBe("my-repo");
     });
 
-    test("returns null for wrong user", async () => {
+    test("denies access to a repository owned by another user", async () => {
       const t = createTestConvex();
       const { userId } = await setupUser(t);
-      const { userId: otherUserId } = await setupUser(t, "clerk_456");
+      const { userId: otherUserId, clerkUserId: otherClerk } = await setupUser(t, "clerk_456");
 
       await t.mutation(internal.repositories.upsertRepositories, {
         userId,
         repositories: [makeRepo({ githubId: 1, name: "private-repo" })],
       });
 
-      const repos = await t.query(api.repositories.getUserRepositories, {
+      const repos = await t.withIdentity({ subject: "clerk_123" }).query(api.repositories.getUserRepositories, {
         clerkUserId: "clerk_123",
       });
-      const repo = await t.query(api.repositories.getRepository, {
-        userId: otherUserId,
-        repositoryId: repos[0]._id,
-      });
-      expect(repo).toBeNull();
+      await expect(
+        t.withIdentity({ subject: otherClerk }).query(api.repositories.getRepository, {
+          userId: otherUserId,
+          repositoryId: repos[0]._id,
+        })
+      ).rejects.toThrow("Repository not found or access denied");
     });
   });
 
   describe("getUserRepositories", () => {
-    test("returns empty array for non-existent user", async () => {
+    test("rejects a non-existent authenticated user", async () => {
       const t = createTestConvex();
-      const repos = await t.query(api.repositories.getUserRepositories, {
-        clerkUserId: "nonexistent",
-      });
-      expect(repos).toEqual([]);
+      await expect(
+        t.withIdentity({ subject: "nonexistent" }).query(api.repositories.getUserRepositories, {
+          clerkUserId: "nonexistent",
+        })
+      ).rejects.toThrow("User not found");
     });
 
     test("filters by language", async () => {
@@ -179,7 +181,7 @@ describe("repositories", () => {
         ],
       });
 
-      const repos = await t.query(api.repositories.getUserRepositories, {
+      const repos = await t.withIdentity({ subject: clerkUserId }).query(api.repositories.getUserRepositories, {
         clerkUserId,
         filters: { language: "TypeScript" },
       });
@@ -200,7 +202,7 @@ describe("repositories", () => {
         ],
       });
 
-      const repos = await t.query(api.repositories.getUserRepositories, {
+      const repos = await t.withIdentity({ subject: clerkUserId }).query(api.repositories.getUserRepositories, {
         clerkUserId,
         filters: { minStars: 10, maxStars: 100 },
       });
@@ -221,7 +223,7 @@ describe("repositories", () => {
         ],
       });
 
-      const repos = await t.query(api.repositories.getUserRepositories, {
+      const repos = await t.withIdentity({ subject: clerkUserId }).query(api.repositories.getUserRepositories, {
         clerkUserId,
         sort: "stars",
         direction: "desc",
@@ -244,7 +246,7 @@ describe("repositories", () => {
         ],
       });
 
-      const repos = await t.query(api.repositories.getUserRepositories, {
+      const repos = await t.withIdentity({ subject: clerkUserId }).query(api.repositories.getUserRepositories, {
         clerkUserId,
         limit: 2,
       });
@@ -260,22 +262,22 @@ describe("repositories", () => {
         repositories: [makeRepo({ githubId: 1, name: "categorized" })],
       });
 
-      const catId = await t.mutation(api.categories.createCategory, {
+      const catId = await t.withIdentity({ subject: clerkUserId }).mutation(api.categories.createCategory, {
         clerkUserId,
         name: "TestCat",
         color: "#ff0000",
       });
 
-      const repos = await t.query(api.repositories.getUserRepositories, { clerkUserId });
-      await t.mutation(api.repositories.addRepositoryToCategory, {
+      const repos = await t.withIdentity({ subject: clerkUserId }).query(api.repositories.getUserRepositories, { clerkUserId });
+      await t.withIdentity({ subject: clerkUserId }).mutation(api.repositories.addRepositoryToCategory, {
         clerkUserId,
         repositoryId: repos[0]._id,
         categoryId: catId,
       });
 
-      const enriched = await t.query(api.repositories.getUserRepositories, { clerkUserId });
-      expect(enriched[0].categories.length).toBe(1);
-      expect(enriched[0].categories[0].name).toBe("TestCat");
+      const enriched = await t.withIdentity({ subject: clerkUserId }).query(api.repositories.getUserRepositories, { clerkUserId });
+      expect(enriched[0].categories!.length).toBe(1);
+      expect(enriched[0].categories![0]!.name).toBe("TestCat");
     });
   });
 
@@ -289,23 +291,23 @@ describe("repositories", () => {
         repositories: [makeRepo({ githubId: 1, name: "repo" })],
       });
 
-      const catId = await t.mutation(api.categories.createCategory, {
+      const catId = await t.withIdentity({ subject: clerkUserId }).mutation(api.categories.createCategory, {
         clerkUserId,
         name: "MyCat",
         color: "#123456",
       });
 
-      const repos = await t.query(api.repositories.getUserRepositories, { clerkUserId });
+      const repos = await t.withIdentity({ subject: clerkUserId }).query(api.repositories.getUserRepositories, { clerkUserId });
       const repoId = repos[0]._id;
 
       // Add
-      await t.mutation(api.repositories.addRepositoryToCategory, {
+      await t.withIdentity({ subject: clerkUserId }).mutation(api.repositories.addRepositoryToCategory, {
         clerkUserId,
         repositoryId: repoId,
         categoryId: catId,
       });
 
-      let stats = await t.query(api.categories.getCategoryWithStats, {
+      let stats = await t.withIdentity({ subject: clerkUserId }).query(api.categories.getCategoryWithStats, {
         clerkUserId,
         categoryId: catId,
       });
@@ -313,7 +315,7 @@ describe("repositories", () => {
 
       // Duplicate add should throw
       await expect(
-        t.mutation(api.repositories.addRepositoryToCategory, {
+        t.withIdentity({ subject: clerkUserId }).mutation(api.repositories.addRepositoryToCategory, {
           clerkUserId,
           repositoryId: repoId,
           categoryId: catId,
@@ -321,13 +323,13 @@ describe("repositories", () => {
       ).rejects.toThrow("already in this category");
 
       // Remove
-      await t.mutation(api.repositories.removeRepositoryFromCategory, {
+      await t.withIdentity({ subject: clerkUserId }).mutation(api.repositories.removeRepositoryFromCategory, {
         clerkUserId,
         repositoryId: repoId,
         categoryId: catId,
       });
 
-      stats = await t.query(api.categories.getCategoryWithStats, {
+      stats = await t.withIdentity({ subject: clerkUserId }).query(api.categories.getCategoryWithStats, {
         clerkUserId,
         categoryId: catId,
       });
@@ -344,18 +346,18 @@ describe("repositories", () => {
         repositories: [makeRepo({ githubId: 1, name: "repo" })],
       });
 
-      const catId = await t.mutation(api.categories.createCategory, {
+      const catId = await t.withIdentity({ subject: otherClerk }).mutation(api.categories.createCategory, {
         clerkUserId: otherClerk,
         name: "OtherCat",
         color: "#999999",
       });
 
-      const repos = await t.query(api.repositories.getUserRepositories, {
+      const repos = await t.withIdentity({ subject: "clerk_123" }).query(api.repositories.getUserRepositories, {
         clerkUserId: "clerk_123",
       });
 
       await expect(
-        t.mutation(api.repositories.addRepositoryToCategory, {
+        t.withIdentity({ subject: otherClerk }).mutation(api.repositories.addRepositoryToCategory, {
           clerkUserId: otherClerk,
           repositoryId: repos[0]._id,
           categoryId: catId,
@@ -378,7 +380,7 @@ describe("repositories", () => {
         ],
       });
 
-      const stats = await t.query(api.repositories.getRepositoryStats, { clerkUserId });
+      const stats = await t.withIdentity({ subject: clerkUserId }).query(api.repositories.getRepositoryStats, { clerkUserId });
       expect(stats.totalCount).toBe(3);
       expect(stats.totalStars).toBe(350);
       expect(stats.averageStars).toBe(117); // Math.round(350/3)
@@ -388,13 +390,13 @@ describe("repositories", () => {
       expect(stats.topTopics[0].count).toBe(2);
     });
 
-    test("returns defaults for non-existent user", async () => {
+    test("rejects a non-existent authenticated user", async () => {
       const t = createTestConvex();
-      const stats = await t.query(api.repositories.getRepositoryStats, {
-        clerkUserId: "nonexistent",
-      });
-      expect(stats.totalCount).toBe(0);
-      expect(stats.totalStars).toBe(0);
+      await expect(
+        t.withIdentity({ subject: "nonexistent" }).query(api.repositories.getRepositoryStats, {
+          clerkUserId: "nonexistent",
+        })
+      ).rejects.toThrow("User not found");
     });
   });
 
@@ -412,7 +414,7 @@ describe("repositories", () => {
         ],
       });
 
-      const languages = await t.query(api.repositories.getLanguages, { clerkUserId });
+      const languages = await t.withIdentity({ subject: clerkUserId }).query(api.repositories.getLanguages, { clerkUserId });
       expect(languages[0].language).toBe("TypeScript");
       expect(languages[0].count).toBe(2);
       expect(languages[1].language).toBe("Go");
@@ -431,7 +433,7 @@ describe("repositories", () => {
         ],
       });
 
-      const topics = await t.query(api.repositories.getTopics, { clerkUserId });
+      const topics = await t.withIdentity({ subject: clerkUserId }).query(api.repositories.getTopics, { clerkUserId });
       expect(topics[0].topic).toBe("react");
       expect(topics[0].count).toBe(2);
     });
@@ -453,7 +455,7 @@ describe("repositories", () => {
         repo: "target",
       });
 
-      const repos = await t.query(api.repositories.getUserRepositories, { clerkUserId });
+      const repos = await t.withIdentity({ subject: clerkUserId }).query(api.repositories.getUserRepositories, { clerkUserId });
       expect(repos.length).toBe(0);
     });
   });

@@ -1,14 +1,7 @@
 import { ConvexError, v } from "convex/values";
 import { mutation, query } from "./_generated/server";
 import { nanoid } from "nanoid";
-
-// Helper function to get user by Clerk ID
-const getUserByClerkIdHelper = async (ctx: any, clerkUserId: string) => {
-  return await ctx.db
-    .query("users")
-    .withIndex("by_clerk_user_id", (q: any) => q.eq("clerkUserId", clerkUserId))
-    .first();
-};
+import { assertUserOwns, requireAuthenticatedUser } from "./authz";
 
 // Create a new list
 export const create = mutation({
@@ -21,10 +14,7 @@ export const create = mutation({
     icon: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    const user = await getUserByClerkIdHelper(ctx, args.clerkUserId);
-    if (!user) {
-      throw new ConvexError("User not found");
-    }
+    const user = await requireAuthenticatedUser(ctx, args.clerkUserId);
 
     const now = Date.now();
     const shareId = args.visibility === "public" ? nanoid(12) : undefined;
@@ -58,15 +48,13 @@ export const update = mutation({
     icon: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    const user = await getUserByClerkIdHelper(ctx, args.clerkUserId);
-    if (!user) {
-      throw new ConvexError("User not found");
-    }
+    const user = await requireAuthenticatedUser(ctx, args.clerkUserId);
 
     const list = await ctx.db.get(args.listId);
-    if (!list || list.ownerId !== user._id) {
+    if (!list) {
       throw new ConvexError("List not found or access denied");
     }
+    assertUserOwns(list.ownerId, user._id, "List");
 
     const updateData: any = {
       updatedAt: Date.now(),
@@ -97,15 +85,13 @@ export const deleteList = mutation({
     listId: v.id("lists"),
   },
   handler: async (ctx, args) => {
-    const user = await getUserByClerkIdHelper(ctx, args.clerkUserId);
-    if (!user) {
-      throw new ConvexError("User not found");
-    }
+    const user = await requireAuthenticatedUser(ctx, args.clerkUserId);
 
     const list = await ctx.db.get(args.listId);
-    if (!list || list.ownerId !== user._id) {
+    if (!list) {
       throw new ConvexError("List not found or access denied");
     }
+    assertUserOwns(list.ownerId, user._id, "List");
 
     // Delete all listRepositories entries for this list
     const listRepos = await ctx.db
@@ -128,14 +114,7 @@ export const getMyLists = query({
     clerkUserId: v.string(),
   },
   handler: async (ctx, args) => {
-    const user = await ctx.db
-      .query("users")
-      .withIndex("by_clerk_user_id", (q) => q.eq("clerkUserId", args.clerkUserId))
-      .first();
-
-    if (!user) {
-      return [];
-    }
+    const user = await requireAuthenticatedUser(ctx, args.clerkUserId);
 
     const lists = await ctx.db
       .query("lists")
@@ -153,19 +132,13 @@ export const getList = query({
     listId: v.id("lists"),
   },
   handler: async (ctx, args) => {
-    const user = await ctx.db
-      .query("users")
-      .withIndex("by_clerk_user_id", (q) => q.eq("clerkUserId", args.clerkUserId))
-      .first();
-
-    if (!user) {
-      throw new ConvexError("User not found");
-    }
+    const user = await requireAuthenticatedUser(ctx, args.clerkUserId);
 
     const list = await ctx.db.get(args.listId);
-    if (!list || list.ownerId !== user._id) {
+    if (!list) {
       throw new ConvexError("List not found or access denied");
     }
+    assertUserOwns(list.ownerId, user._id, "List");
 
     // Get repositories in this list
     const listRepos = await ctx.db
@@ -180,7 +153,7 @@ export const getList = query({
     const repositories = await Promise.all(
       listRepos.map(async (lr) => {
         const repo = await ctx.db.get(lr.repositoryId);
-        if (!repo) return null;
+        if (!repo || repo.userId !== user._id) return null;
         return {
           ...repo,
           listRepoId: lr._id,
@@ -213,8 +186,11 @@ export const getPublicList = query({
       return null;
     }
 
-    // Get owner info
+    // Get owner info. A dangling owner is never published anonymously.
     const owner = await ctx.db.get(list.ownerId);
+    if (!owner) {
+      return null;
+    }
 
     // Get repositories in this list
     const listRepos = await ctx.db
@@ -229,7 +205,8 @@ export const getPublicList = query({
     const repositories = await Promise.all(
       listRepos.map(async (lr) => {
         const repo = await ctx.db.get(lr.repositoryId);
-        if (!repo) return null;
+        // A public list may only expose repositories owned by its list owner.
+        if (!repo || repo.userId !== list.ownerId) return null;
         return {
           _id: repo._id,
           name: repo.name,
@@ -240,7 +217,11 @@ export const getPublicList = query({
           stargazersCount: repo.stargazersCount,
           forksCount: repo.forksCount,
           topics: repo.topics,
-          owner: repo.owner,
+          owner: {
+            login: repo.owner.login,
+            avatarUrl: repo.owner.avatarUrl,
+            type: repo.owner.type,
+          },
           listNotes: lr.notes,
           sortOrder: lr.sortOrder,
         };
@@ -248,9 +229,17 @@ export const getPublicList = query({
     );
 
     return {
-      ...list,
-      ownerName: owner?.firstName || owner?.githubUsername || "Anonymous",
-      ownerAvatar: owner?.imageUrl,
+      _id: list._id,
+      name: list.name,
+      ...(list.description !== undefined ? { description: list.description } : {}),
+      visibility: "public" as const,
+      ...(list.color !== undefined ? { color: list.color } : {}),
+      ...(list.icon !== undefined ? { icon: list.icon } : {}),
+      repositoryCount: list.repositoryCount,
+      createdAt: list.createdAt,
+      updatedAt: list.updatedAt,
+      ownerName: owner.firstName || owner.githubUsername || "Anonymous",
+      ...(owner.imageUrl !== undefined ? { ownerAvatar: owner.imageUrl } : {}),
       repositories: repositories.filter(Boolean),
     };
   },
@@ -265,22 +254,21 @@ export const addRepository = mutation({
     notes: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    const user = await getUserByClerkIdHelper(ctx, args.clerkUserId);
-    if (!user) {
-      throw new ConvexError("User not found");
-    }
+    const user = await requireAuthenticatedUser(ctx, args.clerkUserId);
 
     // Verify list ownership
     const list = await ctx.db.get(args.listId);
-    if (!list || list.ownerId !== user._id) {
+    if (!list) {
       throw new ConvexError("List not found or access denied");
     }
+    assertUserOwns(list.ownerId, user._id, "List");
 
     // Verify repository ownership
     const repo = await ctx.db.get(args.repositoryId);
-    if (!repo || repo.userId !== user._id) {
+    if (!repo) {
       throw new ConvexError("Repository not found or access denied");
     }
+    assertUserOwns(repo.userId, user._id, "Repository");
 
     // Check if already in list
     const existing = await ctx.db
@@ -330,16 +318,20 @@ export const removeRepository = mutation({
     repositoryId: v.id("repositories"),
   },
   handler: async (ctx, args) => {
-    const user = await getUserByClerkIdHelper(ctx, args.clerkUserId);
-    if (!user) {
-      throw new ConvexError("User not found");
-    }
+    const user = await requireAuthenticatedUser(ctx, args.clerkUserId);
 
     // Verify list ownership
     const list = await ctx.db.get(args.listId);
-    if (!list || list.ownerId !== user._id) {
+    if (!list) {
       throw new ConvexError("List not found or access denied");
     }
+    assertUserOwns(list.ownerId, user._id, "List");
+
+    const repository = await ctx.db.get(args.repositoryId);
+    if (!repository) {
+      throw new ConvexError("Repository not found or access denied");
+    }
+    assertUserOwns(repository.userId, user._id, "Repository");
 
     // Find the entry
     const entry = await ctx.db
@@ -372,15 +364,21 @@ export const reorderRepositories = mutation({
     repositoryIds: v.array(v.id("repositories")),
   },
   handler: async (ctx, args) => {
-    const user = await getUserByClerkIdHelper(ctx, args.clerkUserId);
-    if (!user) {
-      throw new ConvexError("User not found");
-    }
+    const user = await requireAuthenticatedUser(ctx, args.clerkUserId);
 
     // Verify list ownership
     const list = await ctx.db.get(args.listId);
-    if (!list || list.ownerId !== user._id) {
+    if (!list) {
       throw new ConvexError("List not found or access denied");
+    }
+    assertUserOwns(list.ownerId, user._id, "List");
+
+    for (const repositoryId of args.repositoryIds) {
+      const repository = await ctx.db.get(repositoryId);
+      if (!repository) {
+        throw new ConvexError("Repository not found or access denied");
+      }
+      assertUserOwns(repository.userId, user._id, "Repository");
     }
 
     // Update sort order for each repository
@@ -410,16 +408,20 @@ export const updateRepositoryNotes = mutation({
     notes: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    const user = await getUserByClerkIdHelper(ctx, args.clerkUserId);
-    if (!user) {
-      throw new ConvexError("User not found");
-    }
+    const user = await requireAuthenticatedUser(ctx, args.clerkUserId);
 
     // Verify list ownership
     const list = await ctx.db.get(args.listId);
-    if (!list || list.ownerId !== user._id) {
+    if (!list) {
       throw new ConvexError("List not found or access denied");
     }
+    assertUserOwns(list.ownerId, user._id, "List");
+
+    const repository = await ctx.db.get(args.repositoryId);
+    if (!repository) {
+      throw new ConvexError("Repository not found or access denied");
+    }
+    assertUserOwns(repository.userId, user._id, "Repository");
 
     // Find the entry
     const entry = await ctx.db
@@ -445,14 +447,13 @@ export const getListsForRepository = query({
     repositoryId: v.id("repositories"),
   },
   handler: async (ctx, args) => {
-    const user = await ctx.db
-      .query("users")
-      .withIndex("by_clerk_user_id", (q) => q.eq("clerkUserId", args.clerkUserId))
-      .first();
+    const user = await requireAuthenticatedUser(ctx, args.clerkUserId);
 
-    if (!user) {
-      return [];
+    const repository = await ctx.db.get(args.repositoryId);
+    if (!repository) {
+      throw new ConvexError("Repository not found or access denied");
     }
+    assertUserOwns(repository.userId, user._id, "Repository");
 
     // Get all list entries for this repository
     const listEntries = await ctx.db

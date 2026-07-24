@@ -208,7 +208,7 @@ const DocumentReaderPanel: React.FC<DocumentReaderPanelProps> = ({
 
   const styles = StyleSheet.create({
     backdrop: {
-      ...StyleSheet.absoluteFillObject,
+      ...StyleSheet.absoluteFill,
       backgroundColor: "#000000",
       zIndex: 20,
     },

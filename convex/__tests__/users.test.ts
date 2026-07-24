@@ -7,7 +7,7 @@ describe("users", () => {
     test("creates new user with default preferences and default categories", async () => {
       const t = createTestConvex();
 
-      const userId = await t.mutation(api.users.upsertUserFromClerk, {
+      const userId = await t.withIdentity({ subject: "clerk_123" }).mutation(api.users.upsertUserFromClerk, {
         clerkUserId: "clerk_123",
         email: "test@example.com",
         firstName: "Test",
@@ -17,7 +17,7 @@ describe("users", () => {
       expect(userId).toBeDefined();
 
       // Verify user was created with correct defaults
-      const profile = await t.query(api.users.getUserProfile, {
+      const profile = await t.withIdentity({ subject: "clerk_123" }).query(api.users.getUserProfile, {
         clerkUserId: "clerk_123",
       });
       expect(profile).not.toBeNull();
@@ -31,7 +31,7 @@ describe("users", () => {
       });
 
       // Verify default categories were created
-      const categories = await t.query(api.categories.getUserCategories, {
+      const categories = await t.withIdentity({ subject: "clerk_123" }).query(api.categories.getUserCategories, {
         clerkUserId: "clerk_123",
       });
       expect(categories.length).toBe(4);
@@ -42,13 +42,13 @@ describe("users", () => {
     test("updates existing user without duplicating", async () => {
       const t = createTestConvex();
 
-      const userId1 = await t.mutation(api.users.upsertUserFromClerk, {
+      const userId1 = await t.withIdentity({ subject: "clerk_123" }).mutation(api.users.upsertUserFromClerk, {
         clerkUserId: "clerk_123",
         email: "test@example.com",
         firstName: "Test",
       });
 
-      const userId2 = await t.mutation(api.users.upsertUserFromClerk, {
+      const userId2 = await t.withIdentity({ subject: "clerk_123" }).mutation(api.users.upsertUserFromClerk, {
         clerkUserId: "clerk_123",
         email: "updated@example.com",
         firstName: "Updated",
@@ -56,17 +56,17 @@ describe("users", () => {
 
       expect(userId1).toEqual(userId2);
 
-      const profile = await t.query(api.users.getUserProfile, {
+      const profile = await t.withIdentity({ subject: "clerk_123" }).query(api.users.getUserProfile, {
         clerkUserId: "clerk_123",
       });
       expect(profile!.email).toBe("updated@example.com");
       expect(profile!.firstName).toBe("Updated");
     });
 
-    test("stores GitHub account data when provided", async () => {
+    test("returns only safe GitHub account fields when provided", async () => {
       const t = createTestConvex();
 
-      await t.mutation(api.users.upsertUserFromClerk, {
+      await t.withIdentity({ subject: "clerk_123" }).mutation(api.users.upsertUserFromClerk, {
         clerkUserId: "clerk_123",
         email: "test@example.com",
         githubAccount: {
@@ -76,19 +76,19 @@ describe("users", () => {
         },
       });
 
-      const profile = await t.query(api.users.getUserProfile, {
+      const profile = await t.withIdentity({ subject: "clerk_123" }).query(api.users.getUserProfile, {
         clerkUserId: "clerk_123",
       });
-      expect(profile!.githubExternalAccountId).toBe("ext_123");
       expect(profile!.githubUsername).toBe("testuser");
-      expect(profile!.githubEmail).toBe("gh@example.com");
+      expect(profile).not.toHaveProperty("githubExternalAccountId");
+      expect(profile).not.toHaveProperty("githubEmail");
     });
   });
 
   describe("getUserProfile", () => {
     test("returns null for non-existent user", async () => {
       const t = createTestConvex();
-      const profile = await t.query(api.users.getUserProfile, {
+      const profile = await t.withIdentity({ subject: "nonexistent" }).query(api.users.getUserProfile, {
         clerkUserId: "nonexistent",
       });
       expect(profile).toBeNull();
@@ -99,17 +99,17 @@ describe("users", () => {
     test("merges partial preference updates", async () => {
       const t = createTestConvex();
 
-      await t.mutation(api.users.upsertUserFromClerk, {
+      await t.withIdentity({ subject: "clerk_123" }).mutation(api.users.upsertUserFromClerk, {
         clerkUserId: "clerk_123",
         email: "test@example.com",
       });
 
-      await t.mutation(api.users.updateUserPreferences, {
+      await t.withIdentity({ subject: "clerk_123" }).mutation(api.users.updateUserPreferences, {
         clerkUserId: "clerk_123",
         preferences: { theme: "dark" },
       });
 
-      const profile = await t.query(api.users.getUserProfile, {
+      const profile = await t.withIdentity({ subject: "clerk_123" }).query(api.users.getUserProfile, {
         clerkUserId: "clerk_123",
       });
       expect(profile!.preferences!.theme).toBe("dark");
@@ -121,7 +121,7 @@ describe("users", () => {
     test("throws for non-existent user", async () => {
       const t = createTestConvex();
       await expect(
-        t.mutation(api.users.updateUserPreferences, {
+        t.withIdentity({ subject: "nonexistent" }).mutation(api.users.updateUserPreferences, {
           clerkUserId: "nonexistent",
           preferences: { theme: "dark" },
         })
@@ -133,12 +133,12 @@ describe("users", () => {
     test("returns disconnected for user without GitHub", async () => {
       const t = createTestConvex();
 
-      await t.mutation(api.users.upsertUserFromClerk, {
+      await t.withIdentity({ subject: "clerk_123" }).mutation(api.users.upsertUserFromClerk, {
         clerkUserId: "clerk_123",
         email: "test@example.com",
       });
 
-      const result = await t.query(api.users.isGitHubConnected, {
+      const result = await t.withIdentity({ subject: "clerk_123" }).query(api.users.isGitHubConnected, {
         clerkUserId: "clerk_123",
       });
       expect(result.connected).toBe(false);
@@ -149,7 +149,7 @@ describe("users", () => {
     test("returns connected for user with GitHub account", async () => {
       const t = createTestConvex();
 
-      await t.mutation(api.users.upsertUserFromClerk, {
+      await t.withIdentity({ subject: "clerk_123" }).mutation(api.users.upsertUserFromClerk, {
         clerkUserId: "clerk_123",
         email: "test@example.com",
         githubAccount: {
@@ -158,7 +158,7 @@ describe("users", () => {
         },
       });
 
-      const result = await t.query(api.users.isGitHubConnected, {
+      const result = await t.withIdentity({ subject: "clerk_123" }).query(api.users.isGitHubConnected, {
         clerkUserId: "clerk_123",
       });
       expect(result.connected).toBe(true);
@@ -167,7 +167,7 @@ describe("users", () => {
 
     test("returns disconnected for non-existent user", async () => {
       const t = createTestConvex();
-      const result = await t.query(api.users.isGitHubConnected, {
+      const result = await t.withIdentity({ subject: "nonexistent" }).query(api.users.isGitHubConnected, {
         clerkUserId: "nonexistent",
       });
       expect(result.connected).toBe(false);
@@ -175,42 +175,44 @@ describe("users", () => {
   });
 
   describe("storeGitHubToken", () => {
-    test("creates user if missing and stores token", async () => {
+    test("rejects legacy token storage and does not create a user", async () => {
       const t = createTestConvex();
 
-      await t.mutation(api.users.storeGitHubToken, {
-        clerkUserId: "clerk_new",
-        encryptedToken: "encrypted_abc",
-        githubUsername: "newuser",
-      });
+      await expect(
+        t.withIdentity({ subject: "clerk_new" }).mutation(api.users.storeGitHubToken, {
+          clerkUserId: "clerk_new",
+          encryptedToken: "encrypted_abc",
+          githubUsername: "newuser",
+        })
+      ).rejects.toThrow("Legacy GitHub token storage is disabled");
 
-      const profile = await t.query(api.users.getUserProfile, {
+      const profile = await t.withIdentity({ subject: "clerk_new" }).query(api.users.getUserProfile, {
         clerkUserId: "clerk_new",
       });
-      expect(profile).not.toBeNull();
-      expect(profile!.githubToken).toBe("encrypted_abc");
-      expect(profile!.githubUsername).toBe("newuser");
+      expect(profile).toBeNull();
     });
 
-    test("stores token for existing user", async () => {
+    test("rejects legacy token storage for an existing user", async () => {
       const t = createTestConvex();
 
-      await t.mutation(api.users.upsertUserFromClerk, {
+      await t.withIdentity({ subject: "clerk_123" }).mutation(api.users.upsertUserFromClerk, {
         clerkUserId: "clerk_123",
         email: "test@example.com",
       });
 
-      await t.mutation(api.users.storeGitHubToken, {
-        clerkUserId: "clerk_123",
-        encryptedToken: "encrypted_xyz",
-        githubUsername: "existinguser",
-      });
+      await expect(
+        t.withIdentity({ subject: "clerk_123" }).mutation(api.users.storeGitHubToken, {
+          clerkUserId: "clerk_123",
+          encryptedToken: "encrypted_xyz",
+          githubUsername: "existinguser",
+        })
+      ).rejects.toThrow("Legacy GitHub token storage is disabled");
 
-      const profile = await t.query(api.users.getUserProfile, {
+      const profile = await t.withIdentity({ subject: "clerk_123" }).query(api.users.getUserProfile, {
         clerkUserId: "clerk_123",
       });
-      expect(profile!.githubToken).toBe("encrypted_xyz");
-      expect(profile!.githubUsername).toBe("existinguser");
+      expect(profile).not.toHaveProperty("githubToken");
+      expect(profile!.githubUsername).toBeUndefined();
     });
   });
 });

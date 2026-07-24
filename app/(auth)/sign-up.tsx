@@ -26,11 +26,11 @@ const SignUpScreen = () => {
     setIsLoading(true);
     try {
       const { createdSessionId, signIn, signUp, setActive } = await startOAuthFlow({
-        redirectUrl: Linking.createURL('/(tabs)', { scheme: 'github-stars-organizer' }),
+        redirectUrl: Linking.createURL('/(tabs)', { scheme: 'star-shelf' }),
       });
 
       if (createdSessionId) {
-        setActive!({ session: createdSessionId });
+        if (setActive) await setActive({ session: createdSessionId });
         router.replace('/(tabs)');
       } else {
         // Use signIn or signUp for next steps such as MFA
@@ -162,6 +162,9 @@ const SignUpScreen = () => {
           <Pressable
             style={[styles.githubButton, isLoading && styles.githubButtonDisabled]}
             onPress={onSignUpWithGitHub}
+            accessibilityRole="button"
+            accessibilityLabel="Continue with GitHub"
+            accessibilityState={{ disabled: isLoading, busy: isLoading }}
             disabled={isLoading}
           >
             <Text style={styles.githubButtonText}>
@@ -172,6 +175,8 @@ const SignUpScreen = () => {
           <Pressable
             style={styles.backButton}
             onPress={() => router.back()}
+            accessibilityRole="button"
+            accessibilityLabel="Go back"
           >
             <Text style={styles.backButtonText}>Go Back</Text>
           </Pressable>

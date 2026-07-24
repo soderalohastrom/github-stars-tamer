@@ -1,11 +1,14 @@
 import { ConvexError, v } from "convex/values";
-import { internalMutation, internalQuery, mutation, query } from "./_generated/server";
-import { getUserByClerkIdHelper as getUserByClerkId } from "./users";
+import { mutation, query } from "./_generated/server";
+import { assertUserOwns, requireAuthenticatedUser } from "./authz";
 
 // Get all categories for a user (internal version that accepts userId directly)
 export const getUserCategoriesByUserId = query({
   args: { userId: v.id("users") },
   handler: async (ctx, { userId }) => {
+    const user = await requireAuthenticatedUser(ctx);
+    assertUserOwns(userId, user._id, "User");
+
     const categories = await ctx.db
       .query("categories")
       .withIndex("by_user_id", (q) => q.eq("userId", userId))
@@ -44,16 +47,7 @@ export const getUserCategoriesByUserId = query({
 export const getUserCategories = query({
   args: { clerkUserId: v.string() },
   handler: async (ctx, { clerkUserId }) => {
-    const user = await ctx.db
-      .query("users")
-      .withIndex("by_clerk_user_id", (q) => q.eq("clerkUserId", clerkUserId))
-      .first();
-      
-    if (!user) {
-      // Return empty array instead of throwing error
-      // This allows the app to work gracefully while UserInitializer creates the user
-      return [];
-    }
+    const user = await requireAuthenticatedUser(ctx, clerkUserId);
 
     const categories = await ctx.db
       .query("categories")
@@ -100,17 +94,15 @@ export const createCategory = mutation({
     parentCategoryId: v.optional(v.id("categories")),
   },
   handler: async (ctx, args) => {
-    const user = await getUserByClerkId(ctx, args.clerkUserId);
-    if (!user) {
-      throw new ConvexError("User not found");
-    }
+    const user = await requireAuthenticatedUser(ctx, args.clerkUserId);
 
     // Check if parent category exists and belongs to user
     if (args.parentCategoryId) {
       const parentCategory = await ctx.db.get(args.parentCategoryId);
-      if (!parentCategory || parentCategory.userId !== user._id) {
+      if (!parentCategory) {
         throw new ConvexError("Invalid parent category");
       }
+      assertUserOwns(parentCategory.userId, user._id, "Parent category");
     }
 
     // Get next sort order
@@ -153,22 +145,21 @@ export const updateCategory = mutation({
     parentCategoryId: v.optional(v.id("categories")),
   },
   handler: async (ctx, args) => {
-    const user = await getUserByClerkId(ctx, args.clerkUserId);
-    if (!user) {
-      throw new ConvexError("User not found");
-    }
+    const user = await requireAuthenticatedUser(ctx, args.clerkUserId);
 
     const category = await ctx.db.get(args.categoryId);
-    if (!category || category.userId !== user._id) {
+    if (!category) {
       throw new ConvexError("Category not found");
     }
+    assertUserOwns(category.userId, user._id, "Category");
 
     // Check if new parent category is valid
     if (args.parentCategoryId) {
       const parentCategory = await ctx.db.get(args.parentCategoryId);
-      if (!parentCategory || parentCategory.userId !== user._id) {
+      if (!parentCategory) {
         throw new ConvexError("Invalid parent category");
       }
+      assertUserOwns(parentCategory.userId, user._id, "Parent category");
       
       // Prevent circular references
       if (args.parentCategoryId === args.categoryId) {
@@ -198,22 +189,21 @@ export const deleteCategory = mutation({
     moveRepositoriesTo: v.optional(v.id("categories")), // Optional category to move repos to
   },
   handler: async (ctx, args) => {
-    const user = await getUserByClerkId(ctx, args.clerkUserId);
-    if (!user) {
-      throw new ConvexError("User not found");
-    }
+    const user = await requireAuthenticatedUser(ctx, args.clerkUserId);
 
     const category = await ctx.db.get(args.categoryId);
-    if (!category || category.userId !== user._id) {
+    if (!category) {
       throw new ConvexError("Category not found");
     }
+    assertUserOwns(category.userId, user._id, "Category");
 
     // Check if destination category is valid
     if (args.moveRepositoriesTo) {
       const destCategory = await ctx.db.get(args.moveRepositoriesTo);
-      if (!destCategory || destCategory.userId !== user._id) {
+      if (!destCategory) {
         throw new ConvexError("Invalid destination category");
       }
+      assertUserOwns(destCategory.userId, user._id, "Destination category");
     }
 
     // Handle child categories - move to parent or root
@@ -234,7 +224,9 @@ export const deleteCategory = mutation({
     // Handle repositories in this category
     const repositoryCategories = await ctx.db
       .query("repositoryCategories")
-      .withIndex("by_category_id", (q) => q.eq("categoryId", args.categoryId))
+      .withIndex("by_user_and_category", (q) =>
+        q.eq("userId", user._id).eq("categoryId", args.categoryId)
+      )
       .collect();
 
     for (const repoCat of repositoryCategories) {
@@ -264,22 +256,22 @@ export const reorderCategories = mutation({
     })),
   },
   handler: async (ctx, args) => {
-    const user = await getUserByClerkId(ctx, args.clerkUserId);
-    if (!user) {
-      throw new ConvexError("User not found");
-    }
+    const user = await requireAuthenticatedUser(ctx, args.clerkUserId);
 
     const now = Date.now();
     
     // Update sort orders for all categories in batch
     for (const update of args.categoryUpdates) {
       const category = await ctx.db.get(update.categoryId);
-      if (category && category.userId === user._id) {
-        await ctx.db.patch(update.categoryId, {
-          sortOrder: update.sortOrder,
-          updatedAt: now,
-        });
+      if (!category) {
+        throw new ConvexError("Category not found");
       }
+      assertUserOwns(category.userId, user._id, "Category");
+
+      await ctx.db.patch(update.categoryId, {
+        sortOrder: update.sortOrder,
+        updatedAt: now,
+      });
     }
   },
 });
@@ -291,20 +283,20 @@ export const getCategoryWithStats = query({
     categoryId: v.id("categories"),
   },
   handler: async (ctx, { clerkUserId, categoryId }) => {
-    const user = await getUserByClerkId(ctx, clerkUserId);
-    if (!user) {
-      throw new ConvexError("User not found");
-    }
+    const user = await requireAuthenticatedUser(ctx, clerkUserId);
 
     const category = await ctx.db.get(categoryId);
-    if (!category || category.userId !== user._id) {
+    if (!category) {
       throw new ConvexError("Category not found");
     }
+    assertUserOwns(category.userId, user._id, "Category");
 
     // Get repository count
     const repositoryCount = await ctx.db
       .query("repositoryCategories")
-      .withIndex("by_category_id", (q) => q.eq("categoryId", categoryId))
+      .withIndex("by_user_and_category", (q) =>
+        q.eq("userId", user._id).eq("categoryId", categoryId)
+      )
       .collect()
       .then(results => results.length);
 

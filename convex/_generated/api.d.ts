@@ -9,8 +9,10 @@
  */
 
 import type * as ai from "../ai.js";
+import type * as authz from "../authz.js";
 import type * as categories from "../categories.js";
 import type * as claudeAi from "../claudeAi.js";
+import type * as cloudflareAi from "../cloudflareAi.js";
 import type * as export_ from "../export.js";
 import type * as github from "../github.js";
 import type * as knowledge from "../knowledge.js";
@@ -32,8 +34,10 @@ import type {
 
 declare const fullApi: ApiFromModules<{
   ai: typeof ai;
+  authz: typeof authz;
   categories: typeof categories;
   claudeAi: typeof claudeAi;
+  cloudflareAi: typeof cloudflareAi;
   export: typeof export_;
   github: typeof github;
   knowledge: typeof knowledge;

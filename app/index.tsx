@@ -1,30 +1,38 @@
 import { Redirect } from 'expo-router';
 import { useUser } from '@clerk/clerk-expo';
-import { useEffect } from 'react';
+import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
 
 export default function Index() {
-  const { isSignedIn, isLoaded, user } = useUser();
+  const { isSignedIn, isLoaded } = useUser();
 
-  useEffect(() => {
-    console.log('Auth state changed:', {
-      isLoaded,
-      isSignedIn,
-      userId: user?.id,
-      userExists: !!user,
-    });
-  }, [isLoaded, isSignedIn, user]);
-
-  // Show loading state while auth is initializing
   if (!isLoaded) {
-    console.log('Auth not loaded yet, showing loading...');
-    return null; // or a loading spinner
+    return (
+      <View style={styles.loading}>
+        <ActivityIndicator size="small" color="#FFD84D" />
+        <Text style={styles.loadingLabel}>OPENING YOUR SHELF</Text>
+      </View>
+    );
   }
 
-  if (isSignedIn && user) {
-    console.log('User is signed in, redirecting to tabs...');
+  if (isSignedIn) {
     return <Redirect href="/(tabs)" />;
   }
 
-  console.log('User not signed in, redirecting to welcome...');
   return <Redirect href="/(auth)/welcome" />;
 }
+
+const styles = StyleSheet.create({
+  loading: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 14,
+    backgroundColor: '#10100F',
+  },
+  loadingLabel: {
+    color: '#AAA59B',
+    fontSize: 10,
+    fontWeight: '800',
+    letterSpacing: 1.8,
+  },
+});

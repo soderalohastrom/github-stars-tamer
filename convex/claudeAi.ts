@@ -1,7 +1,8 @@
 import { ConvexError, v } from "convex/values";
-import { action, internalMutation, internalQuery } from "./_generated/server";
-import { internal, api } from "./_generated/api";
+import { action, internalAction, internalMutation, internalQuery } from "./_generated/server";
+import { internal } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
+import { assertUserOwns, requireAuthenticatedActionUser } from "./authz";
 
 // Claude API configuration
 const CLAUDE_API_BASE = "https://api.anthropic.com/v1/messages";
@@ -177,6 +178,27 @@ export const categorizeRepositories = action({
     includeReadme: v.optional(v.boolean()),
     batchId: v.optional(v.string()),
   },
+  handler: async (ctx, args): Promise<any> => {
+    const user = await requireAuthenticatedActionUser(ctx, args.clerkUserId);
+    return await ctx.runAction((internal as any).claudeAi.categorizeRepositoriesInternal, {
+      userId: user._id,
+      repositoryIds: args.repositoryIds,
+      model: args.model,
+      includeReadme: args.includeReadme,
+      batchId: args.batchId,
+    });
+  },
+});
+
+// Internal worker for interactive and scheduled Claude categorization.
+export const categorizeRepositoriesInternal = internalAction({
+  args: {
+    userId: v.id("users"),
+    repositoryIds: v.array(v.id("repositories")),
+    model: v.optional(v.string()),
+    includeReadme: v.optional(v.boolean()),
+    batchId: v.optional(v.string()),
+  },
   handler: async (ctx, args) => {
     const startTime = Date.now();
     const model = args.model || DEFAULT_MODEL;
@@ -191,21 +213,14 @@ export const categorizeRepositories = action({
       );
     }
 
-    // Get user
-    const user = await ctx.runQuery(internal.users.getUserByClerkId, {
-      clerkUserId: args.clerkUserId,
-    });
-    if (!user) {
-      throw new ConvexError("User not found");
-    }
-
     // Fetch repositories data
     const repositories: RepositoryForCategorization[] = [];
     for (const repoId of args.repositoryIds) {
       const repo = await ctx.runQuery(internal.claudeAi.getRepositoryById, {
         repositoryId: repoId,
+        userId: args.userId,
       });
-      if (repo && repo.userId === user._id) {
+      if (repo) {
         repositories.push({
           id: repoId,
           name: repo.name,
@@ -227,7 +242,7 @@ export const categorizeRepositories = action({
     const categories = await ctx.runQuery(
       internal.claudeAi.getUserCategoryNames,
       {
-        userId: user._id,
+        userId: args.userId,
       }
     );
 
@@ -317,7 +332,7 @@ export const categorizeRepositories = action({
 
     // Track usage
     const usageId = await ctx.runMutation(internal.claudeAi.recordAiUsage, {
-      userId: user._id,
+      userId: args.userId,
       provider: "claude",
       model,
       inputTokens,
@@ -346,7 +361,7 @@ export const categorizeRepositories = action({
       const suggestionId = await ctx.runMutation(
         internal.claudeAi.createSuggestion,
         {
-          userId: user._id,
+          userId: args.userId,
           repositoryId: matchingRepo.id as Id<"repositories">,
           suggestedCategoryName: suggestion.category,
           suggestedCategoryColor: suggestion.suggestedColor,
@@ -392,9 +407,15 @@ export const categorizeRepositories = action({
 
 // Internal query to get repository by ID
 export const getRepositoryById = internalQuery({
-  args: { repositoryId: v.id("repositories") },
-  handler: async (ctx, { repositoryId }) => {
-    return await ctx.db.get(repositoryId);
+  args: {
+    repositoryId: v.id("repositories"),
+    userId: v.id("users"),
+  },
+  handler: async (ctx, { repositoryId, userId }) => {
+    const repository = await ctx.db.get(repositoryId);
+    if (!repository) return null;
+    assertUserOwns(repository.userId, userId, "Repository");
+    return repository;
   },
 });
 
@@ -402,6 +423,8 @@ export const getRepositoryById = internalQuery({
 export const getUserCategoryNames = internalQuery({
   args: { userId: v.id("users") },
   handler: async (ctx, { userId }) => {
+    const user = await ctx.db.get(userId);
+    if (!user) throw new ConvexError("User not found");
     const categories = await ctx.db
       .query("categories")
       .withIndex("by_user_id", (q) => q.eq("userId", userId))
@@ -429,6 +452,15 @@ export const recordAiUsage = internalMutation({
     providerRequestId: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
+    const user = await ctx.db.get(args.userId);
+    if (!user) throw new ConvexError("User not found");
+
+    if (args.jobId) {
+      const job = await ctx.db.get(args.jobId);
+      if (!job) throw new ConvexError("Job not found");
+      assertUserOwns(job.userId, args.userId, "Job");
+    }
+
     return await ctx.db.insert("aiUsage", {
       userId: args.userId,
       jobId: args.jobId,
@@ -466,6 +498,10 @@ export const createSuggestion = internalMutation({
     }),
   },
   handler: async (ctx, args) => {
+    const repository = await ctx.db.get(args.repositoryId);
+    if (!repository) throw new ConvexError("Repository not found");
+    assertUserOwns(repository.userId, args.userId, "Repository");
+
     const now = Date.now();
     return await ctx.db.insert("aiCategorizationSuggestions", {
       userId: args.userId,
@@ -487,6 +523,8 @@ export const createSuggestion = internalMutation({
 export const getUsageStats = internalQuery({
   args: { userId: v.id("users") },
   handler: async (ctx, { userId }) => {
+    const user = await ctx.db.get(userId);
+    if (!user) throw new ConvexError("User not found");
     const usage = await ctx.db
       .query("aiUsage")
       .withIndex("by_user_id", (q) => q.eq("userId", userId))
@@ -523,7 +561,8 @@ export const generateCategoryTaxonomy = action({
     categoryCount: v.optional(v.number()), // target 10-20
     model: v.optional(v.string()),
   },
-  handler: async (ctx, args) => {
+  handler: async (ctx, args): Promise<any> => {
+    const user = await requireAuthenticatedActionUser(ctx, args.clerkUserId);
     const model = args.model || DEFAULT_MODEL;
     const targetCount = args.categoryCount || 15;
 
@@ -531,11 +570,6 @@ export const generateCategoryTaxonomy = action({
     if (!apiKey) {
       throw new ConvexError("ANTHROPIC_API_KEY not configured");
     }
-
-    const user = await ctx.runQuery(internal.users.getUserByClerkId, {
-      clerkUserId: args.clerkUserId,
-    });
-    if (!user) throw new ConvexError("User not found");
 
     // Sample repos: take a diverse spread by language and stars
     const allRepos = await ctx.runQuery(internal.claudeAi.sampleRepositories, {
@@ -657,6 +691,8 @@ export const sampleRepositories = internalQuery({
     limit: v.number(),
   },
   handler: async (ctx, { userId, limit }) => {
+    const user = await ctx.db.get(userId);
+    if (!user) throw new ConvexError("User not found");
     // Get all repos sorted by stars descending (most notable first)
     const repos = await ctx.db
       .query("repositories")
@@ -691,6 +727,7 @@ export const testClaudeConnection = action({
     model: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
+    await requireAuthenticatedActionUser(ctx);
     const model = args.model || DEFAULT_MODEL;
     const apiKey = process.env.ANTHROPIC_API_KEY;
 

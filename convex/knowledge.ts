@@ -7,8 +7,13 @@ import {
   mutation,
   query,
 } from "./_generated/server";
-import { internal, api } from "./_generated/api";
+import { internal } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
+import {
+  assertUserOwns,
+  requireAuthenticatedActionUser,
+  requireAuthenticatedUser,
+} from "./authz";
 
 // GitHub API configuration (matches readme.ts)
 const GITHUB_API_BASE = "https://api.github.com";
@@ -93,6 +98,24 @@ interface GraphEdge {
   target: string;
   reason: string;
   edgeType: "llm_discovered" | "shared_topic" | "shared_language" | "same_owner";
+}
+
+interface ProcessRepositoryResult {
+  success: boolean;
+  status: "processed" | "failed" | "no_readme";
+  repositoryId: Id<"repositories">;
+  processingTimeMs?: number;
+  error?: string;
+}
+
+interface ProcessBatchResult {
+  processed: number;
+  failed: number;
+  total: number;
+}
+
+interface BuildCrossReferencesResult {
+  crossReferencesAdded: number;
 }
 
 // ────────────────────────────────────────────────────────────────
@@ -434,7 +457,16 @@ async function callLLM(
 export const getRepositoryById = internalQuery({
   args: { repositoryId: v.id("repositories") },
   handler: async (ctx, { repositoryId }) => {
-    return await ctx.db.get(repositoryId);
+    const repository = await ctx.db.get(repositoryId);
+    if (!repository) return null;
+
+    // Internal callers do not have a Clerk identity, but still must not operate
+    // on orphaned repository records.
+    const owner = await ctx.db.get(repository.userId);
+    if (!owner) {
+      throw new ConvexError("Repository not found or access denied");
+    }
+    return repository;
   },
 });
 
@@ -451,6 +483,13 @@ export const getKnowledgeByUserAndRepo = internalQuery({
     repositoryId: v.id("repositories"),
   },
   handler: async (ctx, { userId, repositoryId }) => {
+    const user = await ctx.db.get(userId);
+    if (!user) throw new ConvexError("User not found");
+
+    const repository = await ctx.db.get(repositoryId);
+    if (!repository) return null;
+    assertUserOwns(repository.userId, userId, "Repository");
+
     return await ctx.db
       .query("repoKnowledge")
       .withIndex("by_user_and_repository", (q) =>
@@ -463,6 +502,9 @@ export const getKnowledgeByUserAndRepo = internalQuery({
 export const getAllKnowledgeForUser = internalQuery({
   args: { userId: v.id("users") },
   handler: async (ctx, { userId }) => {
+    const user = await ctx.db.get(userId);
+    if (!user) throw new ConvexError("User not found");
+
     return await ctx.db
       .query("repoKnowledge")
       .withIndex("by_user_id", (q) => q.eq("userId", userId))
@@ -473,6 +515,9 @@ export const getAllKnowledgeForUser = internalQuery({
 export const getAllRepositoriesForUser = internalQuery({
   args: { userId: v.id("users") },
   handler: async (ctx, { userId }) => {
+    const user = await ctx.db.get(userId);
+    if (!user) throw new ConvexError("User not found");
+
     return await ctx.db
       .query("repositories")
       .withIndex("by_user_id", (q) => q.eq("userId", userId))
@@ -483,6 +528,9 @@ export const getAllRepositoriesForUser = internalQuery({
 export const getRepoCategoriesForUser = internalQuery({
   args: { userId: v.id("users") },
   handler: async (ctx, { userId }) => {
+    const user = await ctx.db.get(userId);
+    if (!user) throw new ConvexError("User not found");
+
     return await ctx.db
       .query("repositoryCategories")
       .withIndex("by_user_id", (q) => q.eq("userId", userId))
@@ -493,10 +541,59 @@ export const getRepoCategoriesForUser = internalQuery({
 export const getCategoriesForUser = internalQuery({
   args: { userId: v.id("users") },
   handler: async (ctx, { userId }) => {
+    const user = await ctx.db.get(userId);
+    if (!user) throw new ConvexError("User not found");
+
     return await ctx.db
       .query("categories")
       .withIndex("by_user_id", (q) => q.eq("userId", userId))
       .collect();
+  },
+});
+
+/**
+ * Validates the resource relationship for both public action wrappers and
+ * scheduled workers. Scheduler-triggered actions have no Clerk identity, so
+ * their authority is the user/job/repository relationship created by the
+ * authenticated mutation that scheduled them.
+ */
+export const validateKnowledgeResources = internalQuery({
+  args: {
+    userId: v.id("users"),
+    repositoryIds: v.array(v.id("repositories")),
+    jobId: v.optional(v.id("aiProcessingJobs")),
+  },
+  handler: async (ctx, args) => {
+    const user = await ctx.db.get(args.userId);
+    if (!user) throw new ConvexError("User not found");
+
+    for (const repositoryId of args.repositoryIds) {
+      const repository = await ctx.db.get(repositoryId);
+      if (!repository) {
+        throw new ConvexError("Repository not found or access denied");
+      }
+      assertUserOwns(repository.userId, user._id, "Repository");
+    }
+
+    if (args.jobId) {
+      const job = await ctx.db.get(args.jobId);
+      if (!job) {
+        throw new ConvexError("Processing job not found or access denied");
+      }
+      assertUserOwns(job.userId, user._id, "Processing job");
+
+      if (job.jobType !== "knowledge_build" && job.jobType !== "knowledge_update") {
+        throw new ConvexError("Processing job not found or access denied");
+      }
+
+      for (const repositoryId of args.repositoryIds) {
+        if (!job.repositoryIds?.some((jobRepositoryId) => jobRepositoryId === repositoryId)) {
+          throw new ConvexError("Repository not found or access denied");
+        }
+      }
+    }
+
+    return user;
   },
 });
 
@@ -544,6 +641,23 @@ export const storeKnowledgePage = internalMutation({
     errorMessage: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
+    const user = await ctx.db.get(args.userId);
+    if (!user) throw new ConvexError("User not found");
+
+    const repository = await ctx.db.get(args.repositoryId);
+    if (!repository) {
+      throw new ConvexError("Repository not found or access denied");
+    }
+    assertUserOwns(repository.userId, user._id, "Repository");
+
+    for (const crossReference of args.crossReferences) {
+      const targetRepository = await ctx.db.get(crossReference.targetRepositoryId);
+      if (!targetRepository) {
+        throw new ConvexError("Repository not found or access denied");
+      }
+      assertUserOwns(targetRepository.userId, user._id, "Repository");
+    }
+
     // Upsert — check for existing entry
     const existing = await ctx.db
       .query("repoKnowledge")
@@ -610,6 +724,11 @@ export const updateJobProgress = internalMutation({
     const job = await ctx.db.get(args.jobId);
     if (!job) return;
 
+    const owner = await ctx.db.get(job.userId);
+    if (!owner) {
+      throw new ConvexError("Processing job not found or access denied");
+    }
+
     const patch: Record<string, any> = {
       progress: {
         processed: args.processed,
@@ -648,6 +767,25 @@ export const updateKnowledgeCrossRefs = internalMutation({
     markdownContent: v.string(),
   },
   handler: async (ctx, args) => {
+    const knowledge = await ctx.db.get(args.knowledgeId);
+    if (!knowledge) {
+      throw new ConvexError("Knowledge page not found or access denied");
+    }
+
+    const sourceRepository = await ctx.db.get(knowledge.repositoryId);
+    if (!sourceRepository) {
+      throw new ConvexError("Repository not found or access denied");
+    }
+    assertUserOwns(sourceRepository.userId, knowledge.userId, "Repository");
+
+    for (const crossReference of args.crossReferences) {
+      const targetRepository = await ctx.db.get(crossReference.targetRepositoryId);
+      if (!targetRepository) {
+        throw new ConvexError("Repository not found or access denied");
+      }
+      assertUserOwns(targetRepository.userId, knowledge.userId, "Repository");
+    }
+
     await ctx.db.patch(args.knowledgeId, {
       crossReferences: args.crossReferences,
       markdownContent: args.markdownContent,
@@ -672,6 +810,17 @@ export const recordKnowledgeUsage = internalMutation({
     providerRequestId: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
+    const user = await ctx.db.get(args.userId);
+    if (!user) throw new ConvexError("User not found");
+
+    if (args.jobId) {
+      const job = await ctx.db.get(args.jobId);
+      if (!job) {
+        throw new ConvexError("Processing job not found or access denied");
+      }
+      assertUserOwns(job.userId, user._id, "Processing job");
+    }
+
     return await ctx.db.insert("aiUsage", {
       userId: args.userId,
       jobId: args.jobId,
@@ -698,11 +847,7 @@ export const getKnowledgePages = query({
     clerkUserId: v.string(),
   },
   handler: async (ctx, args) => {
-    const user = await ctx.db
-      .query("users")
-      .withIndex("by_clerk_user_id", (q) => q.eq("clerkUserId", args.clerkUserId))
-      .first();
-    if (!user) return [];
+    const user = await requireAuthenticatedUser(ctx, args.clerkUserId);
 
     const pages = await ctx.db
       .query("repoKnowledge")
@@ -715,7 +860,7 @@ export const getKnowledgePages = query({
         const repo = await ctx.db.get(page.repositoryId);
         return {
           ...page,
-          repository: repo
+          repository: repo && repo.userId === user._id
             ? {
                 name: repo.name,
                 fullName: repo.fullName,
@@ -739,11 +884,13 @@ export const getKnowledgePage = query({
     repositoryId: v.id("repositories"),
   },
   handler: async (ctx, args) => {
-    const user = await ctx.db
-      .query("users")
-      .withIndex("by_clerk_user_id", (q) => q.eq("clerkUserId", args.clerkUserId))
-      .first();
-    if (!user) return null;
+    const user = await requireAuthenticatedUser(ctx, args.clerkUserId);
+
+    const repository = await ctx.db.get(args.repositoryId);
+    if (!repository) {
+      throw new ConvexError("Repository not found or access denied");
+    }
+    assertUserOwns(repository.userId, user._id, "Repository");
 
     const page = await ctx.db
       .query("repoKnowledge")
@@ -758,30 +905,30 @@ export const getKnowledgePage = query({
     const enrichedCrossRefs = await Promise.all(
       page.crossReferences.map(async (ref) => {
         const targetRepo = await ctx.db.get(ref.targetRepositoryId);
+        if (!targetRepo) {
+          throw new ConvexError("Repository not found or access denied");
+        }
+        assertUserOwns(targetRepo.userId, user._id, "Repository");
         return {
           ...ref,
-          targetRepoName: targetRepo?.fullName || "Unknown",
-          targetRepoLanguage: targetRepo?.language || null,
+          targetRepoName: targetRepo.fullName,
+          targetRepoLanguage: targetRepo.language || null,
         };
       })
     );
 
-    const repo = await ctx.db.get(page.repositoryId);
-
     return {
       ...page,
       crossReferences: enrichedCrossRefs,
-      repository: repo
-        ? {
-            name: repo.name,
-            fullName: repo.fullName,
-            language: repo.language,
-            stargazersCount: repo.stargazersCount,
-            htmlUrl: repo.htmlUrl,
-            description: repo.description,
-            defaultBranch: repo.defaultBranch,
-          }
-        : null,
+      repository: {
+        name: repository.name,
+        fullName: repository.fullName,
+        language: repository.language,
+        stargazersCount: repository.stargazersCount,
+        htmlUrl: repository.htmlUrl,
+        description: repository.description,
+        defaultBranch: repository.defaultBranch,
+      },
     };
   },
 });
@@ -792,17 +939,14 @@ export const getGraphData = query({
     clerkUserId: v.string(),
   },
   handler: async (ctx, args): Promise<{ nodes: GraphNode[]; edges: GraphEdge[] }> => {
-    const user = await ctx.db
-      .query("users")
-      .withIndex("by_clerk_user_id", (q) => q.eq("clerkUserId", args.clerkUserId))
-      .first();
-    if (!user) return { nodes: [], edges: [] };
+    const user = await requireAuthenticatedUser(ctx, args.clerkUserId);
 
     // Get all repos and knowledge pages
     const repos = await ctx.db
       .query("repositories")
       .withIndex("by_user_id", (q) => q.eq("userId", user._id))
       .collect();
+    const repoMap = new Map(repos.map((repo) => [repo._id.toString(), repo]));
 
     const knowledgePages = await ctx.db
       .query("repoKnowledge")
@@ -826,6 +970,7 @@ export const getGraphData = query({
     const repoCategoryNames = new Map<string, string[]>();
     for (const rc of repoCats) {
       const repoId = rc.repositoryId.toString();
+      if (!repoMap.has(repoId)) continue;
       const catName = categoryMap.get(rc.categoryId.toString());
       if (catName) {
         const existing = repoCategoryNames.get(repoId) || [];
@@ -836,7 +981,9 @@ export const getGraphData = query({
 
     // Build knowledge lookup
     const knowledgeMap = new Map(
-      knowledgePages.map((k) => [k.repositoryId.toString(), k])
+      knowledgePages
+        .filter((knowledge) => repoMap.has(knowledge.repositoryId.toString()))
+        .map((knowledge) => [knowledge.repositoryId.toString(), knowledge])
     );
 
     // Build nodes
@@ -857,7 +1004,9 @@ export const getGraphData = query({
     const edges: GraphEdge[] = [];
     const edgeSet = new Set<string>(); // Dedupe bidirectional edges
     for (const knowledge of knowledgePages) {
+      if (!repoMap.has(knowledge.repositoryId.toString())) continue;
       for (const ref of knowledge.crossReferences) {
+        if (!repoMap.has(ref.targetRepositoryId.toString())) continue;
         const edgeKey = [knowledge.repositoryId.toString(), ref.targetRepositoryId.toString()]
           .sort()
           .join("-");
@@ -883,11 +1032,7 @@ export const getKnowledgeStatus = query({
     clerkUserId: v.string(),
   },
   handler: async (ctx, args) => {
-    const user = await ctx.db
-      .query("users")
-      .withIndex("by_clerk_user_id", (q) => q.eq("clerkUserId", args.clerkUserId))
-      .first();
-    if (!user) return { total: 0, processed: 0, failed: 0, noReadme: 0, unprocessed: 0 };
+    const user = await requireAuthenticatedUser(ctx, args.clerkUserId);
 
     const totalRepos = await ctx.db
       .query("repositories")
@@ -921,11 +1066,7 @@ export const searchKnowledge = query({
     searchText: v.string(),
   },
   handler: async (ctx, args) => {
-    const user = await ctx.db
-      .query("users")
-      .withIndex("by_clerk_user_id", (q) => q.eq("clerkUserId", args.clerkUserId))
-      .first();
-    if (!user) return [];
+    const user = await requireAuthenticatedUser(ctx, args.clerkUserId);
 
     const results = await ctx.db
       .query("repoKnowledge")
@@ -940,7 +1081,7 @@ export const searchKnowledge = query({
         const repo = await ctx.db.get(page.repositoryId);
         return {
           ...page,
-          repository: repo
+          repository: repo && repo.userId === user._id
             ? {
                 name: repo.name,
                 fullName: repo.fullName,
@@ -964,13 +1105,8 @@ export const resolveWikilinks = query({
     fullNames: v.array(v.string()),
   },
   handler: async (ctx, args) => {
+    const user = await requireAuthenticatedUser(ctx, args.clerkUserId);
     if (args.fullNames.length === 0) return [];
-
-    const user = await ctx.db
-      .query("users")
-      .withIndex("by_clerk_user_id", (q) => q.eq("clerkUserId", args.clerkUserId))
-      .first();
-    if (!user) return [];
 
     // Load user's repositories and build a lookup by fullName
     const repos = await ctx.db
@@ -1021,11 +1157,7 @@ export const startKnowledgeBuild = mutation({
     clerkUserId: v.string(),
   },
   handler: async (ctx, args) => {
-    const user = await ctx.db
-      .query("users")
-      .withIndex("by_clerk_user_id", (q) => q.eq("clerkUserId", args.clerkUserId))
-      .first();
-    if (!user) throw new ConvexError("User not found");
+    const user = await requireAuthenticatedUser(ctx, args.clerkUserId);
 
     // Check AI settings
     const settings = await ctx.db
@@ -1078,9 +1210,10 @@ export const startKnowledgeBuild = mutation({
       startedAt: Date.now(),
     });
 
-    // Schedule the batch processing action
-    await ctx.scheduler.runAfter(0, api.knowledge.processBatch, {
-      clerkUserId: args.clerkUserId,
+    // Scheduler calls do not carry Clerk identities, so execute the internal
+    // worker with the user/job/repository relationship created above.
+    await ctx.scheduler.runAfter(0, internal.knowledge.processBatchInternal, {
+      userId: user._id,
       repositoryIds: unprocessedIds,
       jobId,
     });
@@ -1101,11 +1234,7 @@ export const getRecentKnowledgeEntries = query({
     limit: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
-    const user = await ctx.db
-      .query("users")
-      .withIndex("by_clerk_user_id", (q) => q.eq("clerkUserId", args.clerkUserId))
-      .first();
-    if (!user) return [];
+    const user = await requireAuthenticatedUser(ctx, args.clerkUserId);
 
     const limit = args.limit ?? 5;
     const entries = await ctx.db
@@ -1120,7 +1249,7 @@ export const getRecentKnowledgeEntries = query({
         return {
           _id: k._id,
           repositoryId: k.repositoryId,
-          fullName: repo?.fullName || "Unknown",
+          fullName: repo && repo.userId === user._id ? repo.fullName : "Unknown",
           status: k.status,
           processedAt: k.processedAt,
           processingTimeMs: k.processingTimeMs,
@@ -1139,11 +1268,7 @@ export const cancelStuckJobs = mutation({
     clerkUserId: v.string(),
   },
   handler: async (ctx, args) => {
-    const user = await ctx.db
-      .query("users")
-      .withIndex("by_clerk_user_id", (q) => q.eq("clerkUserId", args.clerkUserId))
-      .first();
-    if (!user) throw new ConvexError("User not found");
+    const user = await requireAuthenticatedUser(ctx, args.clerkUserId);
 
     const stuckJobs = await ctx.db
       .query("aiProcessingJobs")
@@ -1178,11 +1303,7 @@ export const resetFailedKnowledge = mutation({
     includeNoReadme: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
-    const user = await ctx.db
-      .query("users")
-      .withIndex("by_clerk_user_id", (q) => q.eq("clerkUserId", args.clerkUserId))
-      .first();
-    if (!user) throw new ConvexError("User not found");
+    const user = await requireAuthenticatedUser(ctx, args.clerkUserId);
 
     const entries = await ctx.db
       .query("repoKnowledge")
@@ -1209,11 +1330,7 @@ export const startKnowledgeUpdate = mutation({
     clerkUserId: v.string(),
   },
   handler: async (ctx, args) => {
-    const user = await ctx.db
-      .query("users")
-      .withIndex("by_clerk_user_id", (q) => q.eq("clerkUserId", args.clerkUserId))
-      .first();
-    if (!user) throw new ConvexError("User not found");
+    const user = await requireAuthenticatedUser(ctx, args.clerkUserId);
 
     const settings = await ctx.db
       .query("aiSettings")
@@ -1284,8 +1401,8 @@ export const startKnowledgeUpdate = mutation({
       startedAt: Date.now(),
     });
 
-    await ctx.scheduler.runAfter(0, api.knowledge.processBatch, {
-      clerkUserId: args.clerkUserId,
+    await ctx.scheduler.runAfter(0, internal.knowledge.processBatchInternal, {
+      userId: user._id,
       repositoryIds: repoIds,
       jobId,
     });
@@ -1381,8 +1498,14 @@ export const processRepository = internalAction({
     model: v.string(),
     jobId: v.optional(v.id("aiProcessingJobs")),
   },
-  handler: async (ctx, args) => {
+  handler: async (ctx, args): Promise<ProcessRepositoryResult> => {
     const startTime = Date.now();
+
+    const user = await ctx.runQuery(internal.knowledge.validateKnowledgeResources, {
+      userId: args.userId,
+      repositoryIds: [args.repositoryId],
+      jobId: args.jobId,
+    });
 
     const repo = await ctx.runQuery(internal.knowledge.getRepositoryById, {
       repositoryId: args.repositoryId,
@@ -1390,6 +1513,7 @@ export const processRepository = internalAction({
     if (!repo) {
       throw new ConvexError("Repository not found");
     }
+    assertUserOwns(repo.userId, user._id, "Repository");
 
     // 1. Fetch full README
     const readme = await ctx.runAction(internal.knowledge.fetchFullReadme, {
@@ -1555,41 +1679,62 @@ export const processRepository = internalAction({
   },
 });
 
-// Batch process repositories
+// Batch process repositories. This public wrapper only establishes the caller's
+// identity and resource ownership; the scheduler uses the internal worker below.
 export const processBatch = action({
   args: {
     clerkUserId: v.string(),
     repositoryIds: v.array(v.id("repositories")),
     jobId: v.id("aiProcessingJobs"),
   },
-  handler: async (ctx, args) => {
-    // Get user and settings
-    const user = await ctx.runQuery(internal.users.getUserByClerkId, {
-      clerkUserId: args.clerkUserId,
+  handler: async (ctx, args): Promise<ProcessBatchResult> => {
+    const user = await requireAuthenticatedActionUser(ctx, args.clerkUserId);
+    await ctx.runQuery(internal.knowledge.validateKnowledgeResources, {
+      userId: user._id,
+      repositoryIds: args.repositoryIds,
+      jobId: args.jobId,
     });
-    if (!user) throw new ConvexError("User not found");
+
+    return await ctx.runAction(internal.knowledge.processBatchInternal, {
+      userId: user._id,
+      repositoryIds: args.repositoryIds,
+      jobId: args.jobId,
+    });
+  },
+});
+
+export const processBatchInternal = internalAction({
+  args: {
+    userId: v.id("users"),
+    repositoryIds: v.array(v.id("repositories")),
+    jobId: v.id("aiProcessingJobs"),
+  },
+  handler: async (ctx, args): Promise<ProcessBatchResult> => {
+    const user = await ctx.runQuery(internal.knowledge.validateKnowledgeResources, {
+      userId: args.userId,
+      repositoryIds: args.repositoryIds,
+      jobId: args.jobId,
+    });
 
     const settings = await ctx.runQuery(internal.knowledge.getAiSettings, {
       userId: user._id,
     });
     if (!settings) throw new ConvexError("AI settings not found");
 
-    // Knowledge pipeline only supports cloud providers (not local ollama)
+    // Knowledge pipeline only supports cloud providers (not local ollama).
     if (settings.aiProvider !== "claude" && settings.aiProvider !== "openai" && settings.aiProvider !== "cerebras") {
       throw new ConvexError(
         `Knowledge pipeline does not support provider "${settings.aiProvider}". Use Claude, OpenAI, or Cerebras.`
       );
     }
 
-    // Get GitHub token
     const tokenInfo = await ctx.runQuery(internal.github.getGithubTokenInfo, {
-      clerkUserId: args.clerkUserId,
+      clerkUserId: user.clerkUserId,
     });
     if (!tokenInfo?.accessToken) {
       throw new ConvexError("GitHub token not available");
     }
 
-    // Update job to processing
     await ctx.runMutation(internal.knowledge.updateJobProgress, {
       jobId: args.jobId,
       processed: 0,
@@ -1602,7 +1747,6 @@ export const processBatch = action({
 
     for (const repositoryId of args.repositoryIds) {
       try {
-        // Rate limit between repos
         if (processed > 0) {
           await new Promise((resolve) => setTimeout(resolve, RATE_LIMIT_DELAY_MS));
         }
@@ -1610,16 +1754,18 @@ export const processBatch = action({
         const repo = await ctx.runQuery(internal.knowledge.getRepositoryById, {
           repositoryId,
         });
+        if (!repo) {
+          throw new ConvexError("Repository not found or access denied");
+        }
+        assertUserOwns(repo.userId, user._id, "Repository");
 
-        // Update progress with current repo name
         await ctx.runMutation(internal.knowledge.updateJobProgress, {
           jobId: args.jobId,
           processed,
           total: args.repositoryIds.length,
-          currentRepository: repo?.fullName || "Unknown",
+          currentRepository: repo.fullName,
         });
 
-        // Process the repository
         const result = await ctx.runAction(internal.knowledge.processRepository, {
           userId: user._id,
           repositoryId,
@@ -1635,11 +1781,9 @@ export const processBatch = action({
         console.error(`Error processing repo ${repositoryId}:`, error);
         processed++;
         failed++;
-        // Continue with next repo — resilient per-repo error handling
       }
     }
 
-    // Mark job as completed
     await ctx.runMutation(internal.knowledge.updateJobProgress, {
       jobId: args.jobId,
       processed,
@@ -1647,10 +1791,8 @@ export const processBatch = action({
       status: "completed",
     });
 
-    // Auto-trigger cross-reference pass now that batch is done.
-    // Idempotent — safe to run multiple times.
-    await ctx.scheduler.runAfter(0, api.knowledge.buildCrossReferences, {
-      clerkUserId: args.clerkUserId,
+    await ctx.scheduler.runAfter(0, internal.knowledge.buildCrossReferencesInternal, {
+      userId: user._id,
     });
 
     return {
@@ -1661,18 +1803,30 @@ export const processBatch = action({
   },
 });
 
-// Build cross-references between repos
+// Build cross-references between repos. A public call is authenticated before
+// dispatching to the worker, while scheduled calls target the worker directly.
 export const buildCrossReferences = action({
   args: {
     clerkUserId: v.string(),
   },
-  handler: async (ctx, args) => {
-    const user = await ctx.runQuery(internal.users.getUserByClerkId, {
-      clerkUserId: args.clerkUserId,
+  handler: async (ctx, args): Promise<BuildCrossReferencesResult> => {
+    const user = await requireAuthenticatedActionUser(ctx, args.clerkUserId);
+    return await ctx.runAction(internal.knowledge.buildCrossReferencesInternal, {
+      userId: user._id,
+    });
+  },
+});
+
+export const buildCrossReferencesInternal = internalAction({
+  args: {
+    userId: v.id("users"),
+  },
+  handler: async (ctx, args): Promise<BuildCrossReferencesResult> => {
+    const user = await ctx.runQuery(internal.knowledge.getUserById, {
+      userId: args.userId,
     });
     if (!user) throw new ConvexError("User not found");
 
-    // Load all knowledge pages and repos
     const knowledgePages = await ctx.runQuery(internal.knowledge.getAllKnowledgeForUser, {
       userId: user._id,
     });
@@ -1682,7 +1836,9 @@ export const buildCrossReferences = action({
     });
 
     const repoMap = new Map(repos.map((r) => [r._id.toString(), r]));
-    const processedPages = knowledgePages.filter((k) => k.status === "processed");
+    const processedPages = knowledgePages.filter(
+      (page) => page.status === "processed" && repoMap.has(page.repositoryId.toString())
+    );
 
     if (processedPages.length < 2) {
       return { crossReferencesAdded: 0 };
@@ -1690,7 +1846,6 @@ export const buildCrossReferences = action({
 
     let totalCrossRefs = 0;
 
-    // For each processed page, find deterministic cross-references
     for (const page of processedPages) {
       const repo = repoMap.get(page.repositoryId.toString());
       if (!repo) continue;
@@ -1706,19 +1861,16 @@ export const buildCrossReferences = action({
         const otherRepo = repoMap.get(otherPage.repositoryId.toString());
         if (!otherRepo) continue;
 
-        // Same owner
         if (repo.owner.login === otherRepo.owner.login) {
           crossRefs.push({
             targetRepositoryId: otherPage.repositoryId,
             reason: `Same owner: ${repo.owner.login}`,
             edgeType: "same_owner",
           });
-          continue; // Don't add redundant edges for same-owner repos
+          continue;
         }
 
-        // Shared language
         if (repo.language && otherRepo.language && repo.language === otherRepo.language) {
-          // Only add if they also share a topic (pure language match is too noisy)
           const sharedTopics = repo.topics.filter((t) => otherRepo.topics.includes(t));
           if (sharedTopics.length > 0) {
             crossRefs.push({
@@ -1730,7 +1882,6 @@ export const buildCrossReferences = action({
           }
         }
 
-        // Shared topics (without shared language)
         const sharedTopics = repo.topics.filter((t) => otherRepo.topics.includes(t));
         if (sharedTopics.length >= 2) {
           crossRefs.push({
@@ -1741,10 +1892,7 @@ export const buildCrossReferences = action({
         }
       }
 
-      // Limit cross-refs per repo to avoid noise
       const limitedCrossRefs = crossRefs.slice(0, 10);
-
-      // Build enriched cross-ref data for markdown
       const enrichedRefs = limitedCrossRefs.map((ref) => {
         const targetRepo = repoMap.get(ref.targetRepositoryId.toString());
         return {
@@ -1752,8 +1900,6 @@ export const buildCrossReferences = action({
           reason: ref.reason,
         };
       });
-
-      // Update markdown with cross-references
       const updatedMarkdown = updateMarkdownCrossRefs(page.markdownContent, enrichedRefs);
 
       await ctx.runMutation(internal.knowledge.updateKnowledgeCrossRefs, {
@@ -1776,6 +1922,9 @@ export const buildCrossReferences = action({
 export const getAiSettings = internalQuery({
   args: { userId: v.id("users") },
   handler: async (ctx, { userId }) => {
+    const user = await ctx.db.get(userId);
+    if (!user) throw new ConvexError("User not found");
+
     const settings = await ctx.db
       .query("aiSettings")
       .withIndex("by_user_id", (q) => q.eq("userId", userId))

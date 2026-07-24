@@ -1,0 +1,18 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "github-stars-categorizer",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-07-23",
+  "ai": {
+    "binding": "AI",
+    "remote": true
+  },
+  "vars": {
+    "AI_MODEL": "@cf/meta/llama-3.1-8b-instruct-fast",
+    "ALLOWED_ORIGINS": "",
+    "ALLOWED_EXTENSION_ORIGINS": ""
+  },
+  "observability": {
+    "enabled": true
+  }
+}

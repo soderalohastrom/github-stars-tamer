@@ -70,6 +70,13 @@ const StagingPanel: React.FC<StagingPanelProps> = ({ onOpenAISettings }) => {
     setIsGeneratingTaxonomy(true);
     try {
       const provider = aiSettings?.aiProvider || 'openai';
+      if (provider === 'cloudflare') {
+        Alert.alert(
+          'Ready to organize',
+          'Cloudflare handles repository suggestions directly using your existing categories. Run Organize Stars to review them; taxonomy generation is reserved for optional paid providers.'
+        );
+        return;
+      }
       const generateTaxonomy = provider === 'claude' ? generateTaxonomyClaude : generateTaxonomyOpenAI;
       const result = await generateTaxonomy({ clerkUserId: user.id });
 

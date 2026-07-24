@@ -1,5 +1,6 @@
 import { ConvexError, v } from "convex/values";
-import { internalMutation, internalQuery, mutation, query } from "./_generated/server";
+import { internalMutation, query } from "./_generated/server";
+import { requireAuthenticatedUser } from "./authz";
 
 // Create sync record
 export const createSyncRecord = internalMutation({
@@ -8,6 +9,11 @@ export const createSyncRecord = internalMutation({
     syncType: v.union(v.literal("full"), v.literal("incremental"), v.literal("manual")),
   },
   handler: async (ctx, { userId, syncType }) => {
+    const user = await ctx.db.get(userId);
+    if (!user) {
+      throw new ConvexError("User not found");
+    }
+
     return await ctx.db.insert("syncHistory", {
       userId,
       syncType,
@@ -34,6 +40,15 @@ export const completeSyncRecord = internalMutation({
     totalApiCalls: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
+    const syncRecord = await ctx.db.get(args.syncId);
+    if (!syncRecord) {
+      throw new ConvexError("Sync record not found");
+    }
+    const user = await ctx.db.get(syncRecord.userId);
+    if (!user) {
+      throw new ConvexError("Sync record owner not found");
+    }
+
     await ctx.db.patch(args.syncId, {
       status: "completed",
       completedAt: Date.now(),
@@ -57,6 +72,15 @@ export const failSyncRecord = internalMutation({
     errorMessage: v.string(),
   },
   handler: async (ctx, { syncId, errorMessage }) => {
+    const syncRecord = await ctx.db.get(syncId);
+    if (!syncRecord) {
+      throw new ConvexError("Sync record not found");
+    }
+    const user = await ctx.db.get(syncRecord.userId);
+    if (!user) {
+      throw new ConvexError("Sync record owner not found");
+    }
+
     await ctx.db.patch(syncId, {
       status: "failed",
       completedAt: Date.now(),
@@ -72,14 +96,7 @@ export const getSyncHistory = query({
     limit: v.optional(v.number()),
   },
   handler: async (ctx, { clerkUserId, limit = 10 }) => {
-    const user = await ctx.db
-      .query("users")
-      .withIndex("by_clerk_user_id", (q) => q.eq("clerkUserId", clerkUserId))
-      .first();
-
-    if (!user) {
-      throw new ConvexError("User not found");
-    }
+    const user = await requireAuthenticatedUser(ctx, clerkUserId);
 
     const syncHistory = await ctx.db
       .query("syncHistory")
@@ -95,14 +112,7 @@ export const getSyncHistory = query({
 export const getLatestSyncStatus = query({
   args: { clerkUserId: v.string() },
   handler: async (ctx, { clerkUserId }) => {
-    const user = await ctx.db
-      .query("users")
-      .withIndex("by_clerk_user_id", (q) => q.eq("clerkUserId", clerkUserId))
-      .first();
-
-    if (!user) {
-      throw new ConvexError("User not found");
-    }
+    const user = await requireAuthenticatedUser(ctx, clerkUserId);
 
     const latestSync = await ctx.db
       .query("syncHistory")

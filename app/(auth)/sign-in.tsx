@@ -26,7 +26,7 @@ const SignInScreen = () => {
     console.log('Starting GitHub OAuth flow...');
     setIsLoading(true);
     try {
-      const redirectUrl = Linking.createURL('/(tabs)', { scheme: 'github-stars-organizer' });
+      const redirectUrl = Linking.createURL('/(tabs)', { scheme: 'star-shelf' });
       console.log('Using redirect URL:', redirectUrl);
       
       const result = await startOAuthFlow({
@@ -166,6 +166,9 @@ const SignInScreen = () => {
           <Pressable
             style={[styles.githubButton, isLoading && styles.githubButtonDisabled]}
             onPress={onSignInWithGitHub}
+            accessibilityRole="button"
+            accessibilityLabel="Continue with GitHub"
+            accessibilityState={{ disabled: isLoading, busy: isLoading }}
             disabled={isLoading}
           >
             <Text style={styles.githubButtonText}>
@@ -176,6 +179,8 @@ const SignInScreen = () => {
           <Pressable
             style={styles.backButton}
             onPress={() => router.back()}
+            accessibilityRole="button"
+            accessibilityLabel="Go back"
           >
             <Text style={styles.backButtonText}>Go Back</Text>
           </Pressable>

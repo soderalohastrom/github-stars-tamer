@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Star Shelf settings</title>
+    <link rel="stylesheet" href="options.css">
+  </head>
+  <body>
+    <main class="page">
+      <header class="page-header">
+        <p class="eyebrow">STAR SHELF / SETTINGS</p>
+        <h1>A small, private archive<br>for good ideas.</h1>
+        <p class="lede">Star Shelf reads your GitHub stars only when you ask it to sync. Categorization happens locally in your browser.</p>
+      </header>
+
+      <section class="settings-card" aria-labelledby="github-heading">
+        <div class="section-number">01</div>
+        <div class="section-content">
+          <h2 id="github-heading">Connect GitHub</h2>
+          <p>Use a fine-grained personal access token with <strong>read-only access to your profile’s starred repositories</strong>. Classic tokens need no extra scopes for public stars; private repository stars require appropriate repository read access.</p>
+          <label for="token">Personal access token</label>
+          <div class="token-row"><input id="token" type="password" autocomplete="off" spellcheck="false" placeholder="github_pat_…" aria-describedby="token-help"><button id="reveal-token" type="button" class="text-button" aria-pressed="false">Show</button></div>
+          <p id="token-help" class="hint">Stored only in Chrome’s local extension storage. It is sent only to <code>api.github.com</code> for sync requests.</p>
+          <div class="button-row"><button id="save-button" type="button" class="primary-button">Save token</button><button id="sync-button" type="button" class="secondary-button">Save & sync</button></div>
+          <p id="status" class="status" role="status" aria-live="polite"></p>
+        </div>
+      </section>
+
+      <section class="settings-card privacy-card" aria-labelledby="privacy-heading">
+        <div class="section-number">02</div>
+        <div class="section-content">
+          <h2 id="privacy-heading">Your data stays with you</h2>
+          <ul><li>No analytics, ads, or remote Star Shelf service.</li><li>Your GitHub token and imported repository metadata stay in this Chrome profile.</li><li>The extension requests access only to GitHub pages and the GitHub REST API.</li></ul>
+          <button id="clear-button" type="button" class="danger-button">Clear imported repository data</button>
+          <p class="hint">This keeps your saved token. Remove the token above and save to fully disconnect GitHub.</p>
+        </div>
+      </section>
+      <footer>Star Shelf is intentionally local-first.</footer>
+    </main>
+    <script src="storage.js"></script>
+    <script src="options.js"></script>
+  </body>
+</html>
